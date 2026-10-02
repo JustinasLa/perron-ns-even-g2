@@ -167,6 +167,7 @@ describe('fetchTrips', () => {
 
     const leg = (await fetchTrips('LLS', 'GN'))[0].legs[0]
     expect(leg.stops.map((s) => s.name)).toEqual(['Lelystad Centrum', 'Zwolle', 'Groningen'])
+    expect(leg.intermediateStops).toBe(1)
     expect(leg.stops[0].track).toBe('2')
     expect(leg.stops[1].departureDelayMin).toBe(1) // actual 06:16 vs planned 06:15
     expect(leg.stops[1].track).toBe('7') // actual departure track preferred
@@ -568,7 +569,7 @@ describe('NS response edge cases', () => {
 
   it('limits error text to 80 characters', async () => {
     mockFetch([{ match: '/v3/trips', value: jsonResponse('x'.repeat(100), { ok: false, status: 500 }) }])
-    await expect(fetchTrips('A', 'B')).rejects.toThrow('NS 500: ' + 'x'.repeat(80))
+    await expect(fetchTrips('A', 'B')).rejects.toHaveProperty('message', 'NS 500: ' + 'x'.repeat(80))
   })
 
   it.each([false, true])('reports status even when error body is unreadable: %s', async (rejectBody) => {

@@ -416,11 +416,8 @@ export async function fetchTrips(
         crowd = l.crowdForecast
       }
 
-      let stopCount = 2
-      if (Array.isArray(l.stops)) {
-        stopCount = l.stops.length
-      }
-      let intermediateStops = stopCount - 2
+      const stops = parseStops(l.stops)
+      let intermediateStops = stops.length - 2
       if (intermediateStops < 0) {
         intermediateStops = 0
       }
@@ -459,7 +456,7 @@ export async function fetchTrips(
         durationMin: durationMin,
         crowd: crowd,
         intermediateStops: intermediateStops,
-        stops: parseStops(l.stops),
+        stops: stops,
         exitSide: exitSide,
         walkToNextMin: walkToNextMin,
         cancelled: legCancelled,
