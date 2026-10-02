@@ -343,6 +343,54 @@ let detailTrips: Trip[] = []
 let tripIdx = 0
 let detailStatus: 'loading' | 'ready' | 'error' = 'loading'
 let detailError = ''
+let phoneRoute: SavedRoute | null = null
+let phoneDetailTrip: Trip | null = null
+let phoneRequestId = 0
+let lensRequestId = 0
+
+function sameRoute(a: SavedRoute, b: SavedRoute): boolean {
+  return a.fromCode === b.fromCode && a.toCode === b.toCode
+}
+
+function tripKey(trip: Trip): string {
+  return JSON.stringify([trip.departure, trip.legs.map(function (leg) {
+    return [leg.mode, leg.trainNumber, leg.origin, leg.destination, leg.departure, leg.arrival]
+  })])
+}
+
+function tripIndex(trips: Trip[], selected: Trip | null | undefined): number {
+  if (!selected) {
+    return -1
+  }
+  const key = tripKey(selected)
+  return trips.findIndex(function (trip) {
+    return tripKey(trip) === key
+  })
+}
+
+function replaceDetailTrips(trips: Trip[], selected: Trip | undefined) {
+  const index = tripIndex(trips, selected)
+  detailTrips = trips
+  let count = trips.length
+  if (view !== 'detail') {
+    count = Math.min(count, MAX_TRIP_OPTIONS)
+  }
+  if (index >= 0 && index < count) {
+    tripIdx = index
+  } else {
+    tripIdx = Math.min(tripIdx, Math.max(0, count - 1))
+  }
+  if (trips.length) {
+    detailStatus = 'ready'
+  } else {
+    detailStatus = 'error'
+    detailError = tr('noDepartures')
+  }
+}
+
+function currentLensRequest(requestId: number, route: SavedRoute): boolean {
+  return requestId === lensRequestId && detailRoute === route && view !== 'home'
+}
 
 function lensContent(): string {
   const count = visibleJourneyCount()
@@ -456,7 +504,13 @@ function detailContent(): string {
   if (!route) {
     return lensContent()
   }
-  const count = visibleTripCount()
+  if (detailStatus === 'loading') {
+    return route.fromName + ' > ' + route.toName + '\n\n' + tr('loadingTimes')
+  }
+  if (detailStatus === 'error') {
+    return route.fromName + ' > ' + route.toName + '\n\n! ' + detailError
+  }
+  const count = detailTrips.length
   if (count === 0) {
     return route.fromName + ' > ' + route.toName + '\n\n' + tr('noDepartures')
   }
@@ -510,32 +564,42 @@ function detailContent(): string {
   return lines.join('\n')
 }
 
-async function openTripList() {
-  const count = visibleJourneyCount()
-  if (count === 0) {
-    return
+async function openTripList(route?: SavedRoute, preserveSelection: boolean = false) {
+  if (!route) {
+    const count = visibleJourneyCount()
+    if (count === 0) {
+      return
+    }
+    let index = journeyIdx
+    if (index > count - 1) {
+      index = count - 1
+    }
+    route = savedRoutes[index]
   }
-  let index = journeyIdx
-  if (index > count - 1) {
-    index = count - 1
+  const selected = preserveSelection ? detailTrips[tripIdx] : undefined
+  const requestId = ++lensRequestId
+  const opts = tripOpts()
+  if (!preserveSelection) {
+    view = 'list'
+    tripIdx = 0
   }
-  const route = savedRoutes[index]
-  view = 'list'
   detailRoute = route
   detailStatus = 'loading'
   detailTrips = []
-  tripIdx = 0
   await renderLens()
+  if (!currentLensRequest(requestId, route)) {
+    return
+  }
   try {
-    const trips = await fetchTrips(route.fromCode, route.toCode, tripOpts())
-    detailTrips = trips
-    if (trips.length) {
-      detailStatus = 'ready'
-    } else {
-      detailStatus = 'error'
-      detailError = tr('noDepartures')
+    const trips = await fetchTrips(route.fromCode, route.toCode, opts)
+    if (!currentLensRequest(requestId, route)) {
+      return
     }
+    replaceDetailTrips(trips, selected)
   } catch (e) {
+    if (!currentLensRequest(requestId, route)) {
+      return
+    }
     detailStatus = 'error'
     if (e instanceof Error) {
       detailError = e.message
@@ -543,9 +607,7 @@ async function openTripList() {
       detailError = String(e)
     }
   }
-  if (detailRoute === route) {
-    await renderLens()
-  }
+  await renderLens()
 }
 
 async function refreshOpenTrips() {
@@ -553,41 +615,25 @@ async function refreshOpenTrips() {
   if (!route || (view !== 'list' && view !== 'detail')) {
     return
   }
+  if (detailStatus === 'loading') {
+    return
+  }
+  const requestId = ++lensRequestId
   let trips: Trip[]
   try {
     trips = await fetchTrips(route.fromCode, route.toCode, tripOpts())
   } catch {
     return
   }
-  if (detailRoute !== route || (view !== 'list' && view !== 'detail')) {
+  if (!currentLensRequest(requestId, route)) {
     return
   }
   if (!trips.length) {
     return
   }
-  let selectedDep = ''
-  if (detailTrips[tripIdx]) {
-    selectedDep = detailTrips[tripIdx].departure
-  }
-  detailTrips = trips
-  detailStatus = 'ready'
-  let cap = MAX_TRIP_OPTIONS
-  if (trips.length < cap) {
-    cap = trips.length
-  }
-  let newIdx = -1
-  if (selectedDep) {
-    for (let i = 0; i < trips.length; i++) {
-      if (trips[i].departure === selectedDep) {
-        newIdx = i
-        break
-      }
-    }
-  }
-  if (newIdx >= 0 && newIdx < cap) {
-    tripIdx = newIdx
-  } else if (tripIdx > cap - 1) {
-    tripIdx = cap - 1
+  replaceDetailTrips(trips, detailTrips[tripIdx])
+  if (phoneRoute && sameRoute(phoneRoute, route)) {
+    updatePhoneTrips(trips, phoneRoute)
   }
   await renderLens()
 }
@@ -620,6 +666,7 @@ function goBack(): boolean {
   if (view === 'detail') {
     view = 'list'
   } else if (view === 'list') {
+    lensRequestId++
     view = 'home'
     detailRoute = null
     detailTrips = []
@@ -829,6 +876,7 @@ if (swapBtn) {
     } else {
       delete toEl.dataset.code
     }
+    onFieldEdited()
   })
 }
 
@@ -1200,7 +1248,7 @@ function gapMinutes(a: string, b: string): number {
   return g
 }
 
-function renderTrips(trips: Trip[]) {
+function renderTrips(trips: Trip[], route: SavedRoute | null = detailRoute) {
   if (!results) {
     return
   }
@@ -1220,6 +1268,9 @@ function renderTrips(trips: Trip[]) {
       card.className = 'trip-card cancelled'
     } else {
       card.className = 'trip-card'
+    }
+    if (phoneDetailTrip && tripKey(trip) === tripKey(phoneDetailTrip)) {
+      card.classList.add('selected')
     }
 
     let firstDelay = 0
@@ -1265,7 +1316,8 @@ function renderTrips(trips: Trip[]) {
         el.classList.remove('selected')
       })
       card.classList.add('selected')
-      showDetail(trip, thisIdx)
+      mirrorDetailToLens(thisIdx, route, trips)
+      showDetail(trip)
     })
     results.appendChild(card)
   }
@@ -1528,13 +1580,30 @@ function buildDetail(trip: Trip): string {
     </main>`
 }
 
-function showDetail(trip: Trip, idx: number = detailTrips.indexOf(trip)) {
+function updatePhoneTrips(trips: Trip[], route: SavedRoute) {
+  const selected = phoneDetailTrip
+  renderTrips(trips, route)
+  if (selected) {
+    const index = tripIndex(trips, selected)
+    if (index >= 0) {
+      showDetail(trips[index])
+    } else {
+      detailView.hidden = true
+      stopsView.hidden = true
+      phoneDetailTrip = null
+    }
+  }
+}
+
+function showDetail(trip: Trip) {
+  phoneDetailTrip = trip
   stopsView.hidden = true
   detailView.innerHTML = buildDetail(trip)
   const backBtn = detailView.querySelector<HTMLButtonElement>('#detail-back')
   if (backBtn) {
     backBtn.addEventListener('click', function () {
       detailView.hidden = true
+      phoneDetailTrip = null
       if (view === 'detail') {
         view = 'list'
         renderLens().catch(function (err) {
@@ -1562,7 +1631,6 @@ function showDetail(trip: Trip, idx: number = detailTrips.indexOf(trip)) {
   })
   detailView.scrollTop = 0
   detailView.hidden = false
-  mirrorDetailToLens(idx)
 }
 
 const STOP_START_ICON = icon('Navigate Feature Icon/Location', { size: 18 })
@@ -1726,6 +1794,7 @@ function showStops(leg: TripLeg) {
 }
 
 function mirrorHomeToLens() {
+  lensRequestId++
   view = 'home'
   detailRoute = null
   detailTrips = []
@@ -1734,10 +1803,14 @@ function mirrorHomeToLens() {
   })
 }
 
-function mirrorDetailToLens(idx: number) {
-  if (idx < 0 || idx >= detailTrips.length) {
+function mirrorDetailToLens(idx: number, route: SavedRoute | null = detailRoute, trips: Trip[] = detailTrips) {
+  if (!route || idx < 0 || idx >= trips.length) {
     return
   }
+  lensRequestId++
+  detailRoute = route
+  detailTrips = trips
+  detailStatus = 'ready'
   tripIdx = idx
   view = 'detail'
   renderLens().catch(function (err) {
@@ -2016,12 +2089,12 @@ function commitTime() {
   }
   closeTimeModal()
   updateDepBox()
-  if (results && results.children.length > 0) {
-    planJourney().catch(function (err) {
+  if (phoneRoute) {
+    planJourney(phoneRoute).catch(function (err) {
       console.error(err)
     })
-  } else if (view !== 'home') {
-    openTripList().catch(function (err) {
+  } else if (detailRoute && view !== 'home') {
+    openTripList(detailRoute).catch(function (err) {
       console.error(err)
     })
   }
@@ -2073,7 +2146,8 @@ if (depBox) {
 }
 updateDepBox()
 
-async function planJourney() {
+async function planJourney(activeRoute?: SavedRoute, mirror: boolean = true) {
+  const requestId = ++phoneRequestId
   if (!fromEl || !toEl) {
     return
   }
@@ -2081,8 +2155,8 @@ async function planJourney() {
     setResults('<p class="notice">' + tr('loadingStations') + '</p>')
     return
   }
-  const fromCode = resolveCode(fromEl)
-  const toCode = resolveCode(toEl)
+  const fromCode = activeRoute ? activeRoute.fromCode : resolveCode(fromEl)
+  const toCode = activeRoute ? activeRoute.toCode : resolveCode(toEl)
   if (!fromCode || !toCode) {
     showError(tr('errPickBoth'))
     return
@@ -2093,37 +2167,54 @@ async function planJourney() {
   }
   showPlanAgain(false)
   setResults('<p class="notice">' + tr('planning') + '</p>')
-  const route: SavedRoute = {
+  const route: SavedRoute = activeRoute || {
     fromCode: fromCode,
     fromName: nameForCode(fromCode),
     toCode: toCode,
     toName: nameForCode(toCode),
   }
-  detailRoute = route
-  detailTrips = []
-  detailStatus = 'loading'
-  tripIdx = 0
-  view = 'list'
-  renderLens().catch(function (err) {
-    console.error(err)
-  })
+  phoneRoute = route
+  let selected: Trip | undefined
+  const preserveSelection = activeRoute && detailRoute && sameRoute(route, detailRoute)
+  if (preserveSelection) {
+    selected = detailTrips[tripIdx]
+  }
+  if (!activeRoute) {
+    phoneDetailTrip = null
+  }
+  detailView.hidden = true
+  stopsView.hidden = true
+  let lensId = lensRequestId
+  if (mirror) {
+    lensId = ++lensRequestId
+    detailRoute = route
+    detailTrips = []
+    detailStatus = 'loading'
+    if (!preserveSelection || view === 'home') {
+      tripIdx = 0
+      view = 'list'
+    }
+    renderLens().catch(function (err) {
+      console.error(err)
+    })
+  }
   try {
     const trips = await fetchTrips(fromCode, toCode, tripOpts())
-    renderTrips(trips)
-    if (detailRoute === route) {
-      detailTrips = trips
-      if (trips.length) {
-        detailStatus = 'ready'
-      } else {
-        detailStatus = 'error'
-        detailError = tr('noDepartures')
-      }
+    if (requestId !== phoneRequestId) {
+      return
+    }
+    updatePhoneTrips(trips, route)
+    if (mirror && currentLensRequest(lensId, route)) {
+      replaceDetailTrips(trips, selected)
       renderLens().catch(function (err) {
         console.error(err)
       })
     }
     addRoute(route)
   } catch (e) {
+    if (requestId !== phoneRequestId) {
+      return
+    }
     let msg = ''
     if (e instanceof Error) {
       msg = e.message
@@ -2133,7 +2224,7 @@ async function planJourney() {
     setResults('')
     showPlanAgain(true)
     showError(tr('errCouldNotPlan') + msg)
-    if (detailRoute === route) {
+    if (mirror && currentLensRequest(lensId, route)) {
       detailStatus = 'error'
       detailError = msg
       renderLens().catch(function (err) {
@@ -2163,9 +2254,7 @@ if (clearBtn) {
       toEl.value = ''
       delete toEl.dataset.code
     }
-    setResults('')
-    showPlanAgain(true)
-    mirrorHomeToLens()
+    onFieldEdited()
     if (fromEl) {
       fromEl.focus()
     }
@@ -2173,11 +2262,14 @@ if (clearBtn) {
 }
 
 function onFieldEdited() {
-  if (results && results.children.length) {
-    results.innerHTML = ''
-    showPlanAgain(true)
-    mirrorHomeToLens()
-  }
+  phoneRequestId++
+  phoneRoute = null
+  phoneDetailTrip = null
+  detailView.hidden = true
+  stopsView.hidden = true
+  setResults('')
+  showPlanAgain(true)
+  mirrorHomeToLens()
 }
 if (fromEl) {
   fromEl.addEventListener('input', onFieldEdited)
@@ -2250,6 +2342,7 @@ function useFavorite(f: Favorite) {
   }
   toEl.value = f.name
   toEl.dataset.code = f.code
+  onFieldEdited()
 }
 
 function renderFavorites() {
@@ -2490,6 +2583,25 @@ function selectLang(code: Lang) {
   setLang(code)
   persistLang()
   applyLanguage()
+  replanActiveJourneys()
+}
+
+function replanActiveJourneys() {
+  const route = detailRoute
+  if (phoneRoute) {
+    const mirror = route !== null && sameRoute(phoneRoute, route)
+    planJourney(phoneRoute, mirror).catch(function (err) {
+      console.error(err)
+    })
+    if (mirror) {
+      return
+    }
+  }
+  if (route && view !== 'home') {
+    openTripList(route, true).catch(function (err) {
+      console.error(err)
+    })
+  }
 }
 
 function renderLangMenu() {
