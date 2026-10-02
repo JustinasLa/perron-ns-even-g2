@@ -895,13 +895,35 @@ if (swapBtn) {
 }
 
 let stationList: StationInfo[] = []
-fetchStations()
-  .then(function (list) {
-    stationList = list
-  })
-  .catch(function (err) {
-    console.error('station list load failed:', err)
-  })
+let stationLoad: Promise<boolean> | null = null
+let stationLoadError = false
+
+function loadStations(): Promise<boolean> {
+  if (stationList.length) {
+    return Promise.resolve(true)
+  }
+  if (stationLoad) {
+    return stationLoad
+  }
+  stationLoadError = false
+  stationLoad = fetchStations()
+    .then(function (list) {
+      stationList = list
+      stationLoadError = list.length === 0
+      return !stationLoadError
+    })
+    .catch(function (err) {
+      stationLoadError = true
+      console.error('station list load failed:', err)
+      return false
+    })
+    .finally(function () {
+      stationLoad = null
+    })
+  return stationLoad
+}
+
+loadStations()
 
 function rankStations(q: string): StationInfo[] {
   const ql = q.toLowerCase()
@@ -1055,14 +1077,44 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
       close()
       return
     }
-    render(rankStations(q))
+    if (stationList.length) {
+      render(rankStations(q))
+      return
+    }
+    items = []
+    active = -1
+    list.innerHTML = ''
+    const status = document.createElement('li')
+    status.className = 'notice'
+    status.setAttribute('role', 'status')
+    status.textContent = tr(stationLoadError ? 'errCouldNotLoadStations' : 'loadingStations')
+    list.appendChild(status)
+    list.hidden = false
+    input.setAttribute('aria-expanded', 'true')
   }
+
   input.addEventListener('input', function () {
     delete input.dataset.code
     update()
   })
-  input.addEventListener('focus', update)
+  input.addEventListener('focus', function () {
+    if (stationList.length) {
+      update()
+      return
+    }
+    const loading = loadStations()
+    update()
+    loading.then(function () {
+      if (document.activeElement === input && !list.hidden) {
+        update()
+      }
+    })
+  })
   input.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      close()
+      return
+    }
     if (list.hidden || items.length === 0) {
       return
     }
@@ -1083,8 +1135,6 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
         idx = 0
       }
       choose(items[idx])
-    } else if (e.key === 'Escape') {
-      close()
     }
   })
   function scheduleClose(e: FocusEvent) {
@@ -2166,7 +2216,14 @@ async function planJourney(activeRoute?: SavedRoute, mirror: boolean = true) {
   }
   if (!stationList.length) {
     setResults('<p class="notice">' + tr('loadingStations') + '</p>')
-    return
+    const loaded = await loadStations()
+    if (requestId !== phoneRequestId) {
+      return
+    }
+    if (!loaded) {
+      setResults('<p class="notice">' + tr('errCouldNotLoadStations') + '</p>')
+      return
+    }
   }
   const fromCode = activeRoute ? activeRoute.fromCode : resolveCode(fromEl)
   const toCode = activeRoute ? activeRoute.toCode : resolveCode(toEl)
@@ -2357,6 +2414,7 @@ function useFavorite(f: Favorite) {
   toEl.value = f.name
   toEl.dataset.code = f.code
   onFieldEdited()
+  loadStations()
 }
 
 function renderFavorites() {
@@ -2395,19 +2453,33 @@ function renderFavorites() {
 }
 
 const favAddBtn = document.getElementById('fav-add')
+async function addFavoriteFromInput() {
+  if (!favInput) {
+    return
+  }
+  if (!stationList.length) {
+    setText('fav-add', tr('loadingStations'))
+    const loaded = await loadStations()
+    setText('fav-add', tr('add'))
+    if (!loaded) {
+      showError(tr('errCouldNotLoadStations'))
+      return
+    }
+  }
+  const code = resolveCode(favInput)
+  if (!code) {
+    favInput.placeholder = tr('pickStationFirst')
+    return
+  }
+  addFavorite({ code: code, name: nameForCode(code) })
+  favInput.value = ''
+  delete favInput.dataset.code
+}
 if (favAddBtn) {
   favAddBtn.addEventListener('click', function () {
-    if (!favInput || !stationList.length) {
-      return
-    }
-    const code = resolveCode(favInput)
-    if (!code) {
-      favInput.placeholder = tr('pickStationFirst')
-      return
-    }
-    addFavorite({ code: code, name: nameForCode(code) })
-    favInput.value = ''
-    delete favInput.dataset.code
+    addFavoriteFromInput().catch(function (err) {
+      console.error(err)
+    })
   })
 }
 
