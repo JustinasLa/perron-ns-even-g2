@@ -39,7 +39,9 @@ describe('NS proxy', () => {
     expect(html).toContain('Last updated: 3 October 2026')
     expect(html).toContain("Even Hub's host-backed storage")
     expect(html).toContain('<strong>Language preference</strong>')
-    expect(html).toMatch(/Station autocomplete\s+runs locally against that list; the text you type is not sent to the proxy or NS\./)
+    expect(html).toMatch(/Successful downloads are cached\s+for the app session; failed downloads can be retried on later user actions\./)
+    expect(html).toMatch(/Station autocomplete runs locally against that list; the text you type is not\s+sent to the proxy or NS\./)
+    expect(html).toMatch(/<code>dateTime<\/code> when you choose a specific time or use\s+arrival mode \(including "now"\), and <code>searchForArrival<\/code> for arrival\s+searches\./)
     for (const field of ['getLocalStorage', 'setLocalStorage', 'station', 'fromStation', 'toStation', 'dateTime', 'searchForArrival', 'lang', 'train']) {
       expect(html).toContain('<code>' + field + '</code>')
     }

@@ -27,8 +27,10 @@ used in travel-information requests as described below.
 
 ## Data sent over the network
 
-At startup, the app downloads the station list once. Station autocomplete runs
-locally against that list; the text you type is not sent to the proxy or NS.
+At startup, the app requests the station list. Successful downloads are cached
+for the app session; failed downloads can be retried on later user actions.
+Station autocomplete runs locally against that list; the text you type is not
+sent to the proxy or NS.
 
 For live travel information, the app sends the following request fields to our
 backend proxy, which forwards them to NS:
@@ -36,8 +38,9 @@ backend proxy, which forwards them to NS:
 - **Departure boards and disruptions:** your selected station code (`station`
   for departures, or in the disruptions request path).
 - **Journey planning:** origin and destination station codes (`fromStation`,
-  `toStation`), response language (`lang`), and, when you choose a specific
-  time, `dateTime` and `searchForArrival` for arrival searches.
+  `toStation`), response language (`lang`), `dateTime` when you choose a
+  specific time or use arrival mode (including "now"), and `searchForArrival`
+  for arrival searches.
 - **Train stop lists:** train number (`train`), departure time (`dateTime`)
   when available, and response language (`lang`).
 
