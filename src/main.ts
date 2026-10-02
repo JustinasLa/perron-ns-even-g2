@@ -71,6 +71,10 @@ interface SavedRoute {
 const ROUTES_KEY = 'perron-ns.routes.v1'
 let savedRoutes: SavedRoute[] = []
 
+function isStoredText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 async function loadRoutes(): Promise<SavedRoute[]> {
   try {
     const stored = await bridge.getLocalStorage(ROUTES_KEY)
@@ -78,11 +82,24 @@ async function loadRoutes(): Promise<SavedRoute[]> {
     if (stored) {
       text = stored
     }
-    const raw = JSON.parse(text)
-    if (Array.isArray(raw)) {
-      return raw
+    const raw: unknown = JSON.parse(text)
+    if (!Array.isArray(raw)) {
+      return []
     }
-    return []
+    const result: SavedRoute[] = []
+    const seen = new Set<string>()
+    for (const r of raw) {
+      if (!r || typeof r !== 'object' || !isStoredText(r.fromCode) || !isStoredText(r.fromName) || !isStoredText(r.toCode) || !isStoredText(r.toName)) {
+        continue
+      }
+      const key = JSON.stringify([r.fromCode, r.toCode])
+      if (seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      result.push({ fromCode: r.fromCode, fromName: r.fromName, toCode: r.toCode, toName: r.toName })
+    }
+    return result.slice(0, 8)
   } catch {
     return []
   }
@@ -128,6 +145,11 @@ function removeRoute(fromCode: string, toCode: string) {
 
 function onRoutesChanged() {
   renderSavedRoutes()
+  if (view === 'home') {
+    renderLens().catch(function (err) {
+      console.error(err)
+    })
+  }
 }
 
 type FavIcon = 'home' | 'work' | 'default'
@@ -147,14 +169,22 @@ async function loadFavorites(): Promise<Favorite[]> {
     if (stored) {
       text = stored
     }
-    const raw = JSON.parse(text)
+    const raw: unknown = JSON.parse(text)
     if (!Array.isArray(raw)) {
       return []
     }
     const result: Favorite[] = []
+    const seen = new Set<string>()
     for (const f of raw) {
+      if (!f || typeof f !== 'object' || !isStoredText(f.code) || !isStoredText(f.name)) {
+        continue
+      }
+      if (seen.has(f.code)) {
+        continue
+      }
+      seen.add(f.code)
       let label = f.name
-      if (f.label !== undefined && f.label !== null) {
+      if (typeof f.label === 'string') {
         label = f.label
       }
       let icon: FavIcon = 'default'
