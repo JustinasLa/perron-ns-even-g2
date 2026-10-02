@@ -843,11 +843,12 @@ fetchStations()
 
 function rankStations(q: string): StationInfo[] {
   const ql = q.toLowerCase()
-  const scored: { s: StationInfo; score: number }[] = []
+  const scored: { s: StationInfo; score: number; exactCode: boolean }[] = []
   for (const s of stationList) {
     const name = s.name.toLowerCase()
+    const exactCode = s.code.toLowerCase() === ql
     let score = -1
-    if (name.startsWith(ql) || s.code.toLowerCase() === ql) {
+    if (name.startsWith(ql) || exactCode) {
       score = 0
     } else if (name.includes(ql)) {
       score = 1
@@ -869,9 +870,12 @@ function rankStations(q: string): StationInfo[] {
     if (s.country !== 'NL') {
       score += 3
     }
-    scored.push({ s: s, score: score })
+    scored.push({ s: s, score: score, exactCode: exactCode })
   }
   scored.sort(function (a, b) {
+    if (a.exactCode !== b.exactCode) {
+      return a.exactCode ? -1 : 1
+    }
     if (a.score !== b.score) {
       return a.score - b.score
     }
@@ -887,8 +891,14 @@ function rankStations(q: string): StationInfo[] {
 function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, saveable: boolean = false) {
   let items: StationInfo[] = []
   let active = -1
+  let blurTimer: ReturnType<typeof setTimeout> | undefined
 
+  function cancelClose() {
+    clearTimeout(blurTimer)
+    blurTimer = undefined
+  }
   function close() {
+    cancelClose()
     list.hidden = true
     input.setAttribute('aria-expanded', 'false')
     items = []
@@ -910,6 +920,9 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
     input.value = st.name
     input.dataset.code = st.code
     close()
+    if (input === fromEl || input === toEl) {
+      onFieldEdited()
+    }
   }
   function toggleFavorite(st: StationInfo, starBtn: HTMLElement) {
     if (isFavorite(st.code)) {
@@ -952,6 +965,10 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
         star.addEventListener('mousedown', function (e) {
           e.preventDefault()
           e.stopPropagation()
+        })
+        star.addEventListener('click', function (e) {
+          e.preventDefault()
+          e.stopPropagation()
           toggleFavorite(st, star)
         })
         li.appendChild(star)
@@ -969,15 +986,20 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
     input.setAttribute('aria-expanded', 'true')
   }
 
-  input.addEventListener('input', function () {
-    delete input.dataset.code
+  function update() {
+    cancelClose()
     const q = input.value.trim()
-    if (q.length < 1) {
+    if (q.length < 1 || input.dataset.code) {
       close()
       return
     }
     render(rankStations(q))
+  }
+  input.addEventListener('input', function () {
+    delete input.dataset.code
+    update()
   })
+  input.addEventListener('focus', update)
   input.addEventListener('keydown', function (e) {
     if (list.hidden || items.length === 0) {
       return
@@ -987,7 +1009,11 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
       setActive((active + 1) % items.length)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setActive((active - 1 + items.length) % items.length)
+      if (active <= 0) {
+        setActive(items.length - 1)
+      } else {
+        setActive(active - 1)
+      }
     } else if (e.key === 'Enter') {
       e.preventDefault()
       let idx = active
@@ -999,9 +1025,16 @@ function attachAutocomplete(input: HTMLInputElement, list: HTMLUListElement, sav
       close()
     }
   })
-  input.addEventListener('blur', function () {
-    setTimeout(close, 120)
-  })
+  function scheduleClose(e: FocusEvent) {
+    if (e.relatedTarget === input || list.contains(e.relatedTarget as Node | null)) {
+      return
+    }
+    cancelClose()
+    blurTimer = setTimeout(close, 120)
+  }
+  input.addEventListener('blur', scheduleClose)
+  list.addEventListener('focusout', scheduleClose)
+  list.addEventListener('focusin', cancelClose)
 }
 
 const fromList = document.getElementById('from-list') as HTMLUListElement | null
