@@ -96,6 +96,9 @@ the app from the home screen.
 
 ## Setup
 
+Use [Node.js](https://nodejs.org) 20.x (20.17.0+), 22.x (22.13.0+), or 23.5.0+
+with npm, matching the runtime range in `package.json`.
+
 ```bash
 npm install
 npm run dev          # Vite dev server on http://localhost:5173

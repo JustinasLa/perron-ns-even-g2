@@ -5,7 +5,8 @@ built as an Even Hub app with Vite + TypeScript. This guide walks you through ma
 
 ## Prerequisites
 
-- [Node.js 18+](https://nodejs.org) (provides `node` and `npm`)
+- [Node.js](https://nodejs.org): 20.x (20.17.0+), 22.x (22.13.0+), or 23.5.0+
+  (provides `node` and `npm`)
 
 
 ## 1. Fork and clone
@@ -13,9 +14,9 @@ built as an Even Hub app with Vite + TypeScript. This guide walks you through ma
 Click **Fork** on the repo page, then clone your fork:
 
 ```bash
-git clone https://github.com/<your-username>/perron-ns-g2.git
-cd perron-ns-g2
-git remote add upstream https://github.com/JustinasLaunikonis/perron-ns-g2.git
+git clone https://github.com/<your-username>/perron-ns-even-g2.git
+cd perron-ns-even-g2
+git remote add upstream https://github.com/JustinasLa/perron-ns-even-g2.git
 ```
 
 `origin` is your fork (where you push); `upstream` is this repo (where you pull
@@ -70,7 +71,7 @@ git push -u origin short-description-of-change
 GitHub prints a link after the push - open it (or use the "Compare & pull
 request" banner on your fork) and:
 
-- Confirm the PR targets `JustinasLaunikonis/perron-ns-g2` `main`.
+- Confirm the PR targets `JustinasLa/perron-ns-even-g2` `main`.
 - Fill in the pull request template: what changed, why, and how you tested it.
 - Reference any related issue with `Closes #123`.
 
