@@ -1303,3 +1303,105 @@ describe('SDK startup and lifecycle recovery', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+describe('literal planner text', () => {
+  it('preserves favorite station names and labels through saving, reloading, and reopening', async () => {
+    const name = 'Utrecht\'s <b>West</b> &amp; "Hub"'
+    const label = 'My "Office" &copy; &quot; <img src=x onerror="window.injected=true">'
+    await boot()
+    api.addFavorite({ code: 'UT', name })
+    expect(element('#fav-list .row-name').textContent).toBe(name)
+    click('#fav-list .favmenu')
+    expect(element('#fav-edit .fav-preview-pill').textContent).toBe(name)
+    expect(element<HTMLInputElement>('#fav-name').value).toBe(name)
+    input('#fav-name', label)
+    click('#fav-save')
+    expect(element('#fav-list .row-name').textContent).toBe(label)
+    expect(element('#fav-list').querySelector('img, b, [onerror]')).toBeNull()
+    expect(element('#fav-list').querySelector('svg')).not.toBeNull()
+    const storageCalls = mocks.bridge.setLocalStorage.mock.calls.filter(([key]) => key === 'perron-ns.favorites.v1')
+    const stored = JSON.parse(storageCalls[storageCalls.length - 1][1])
+    expect(stored).toEqual([{ code: 'UT', name, label, icon: 'default' }])
+    api.cleanup()
+    await boot({ favorites: stored })
+    expect(element('#fav-list .row-name').textContent).toBe(label)
+    click('#fav-list .favmenu')
+    expect(element<HTMLInputElement>('#fav-name').value).toBe(label)
+    expect(element('#fav-edit .fav-preview-pill').textContent).toBe(name)
+    expect(element('#fav-edit').querySelector('img, b, [onerror]')).toBeNull()
+    click('#fav-save')
+    expect(api.state.favorites[0]).toEqual(stored[0])
+    expect(mocks.bridge.setLocalStorage).toHaveBeenLastCalledWith('perron-ns.favorites.v1', JSON.stringify(stored))
+  })
+
+  it('renders stored route names literally while preserving the route icon', async () => {
+    const fromName = 'Utrecht <b>West</b> &copy; "Hub"'
+    const toName = 'Amsterdam <img src=x onerror="window.injected=true"> &amp; East'
+    await boot({ routes: [{ ...route, fromName, toName }] })
+    const row = element('#saved .row-name')
+    expect(row.firstChild!.textContent).toBe(fromName + ' ')
+    expect(row.lastChild!.textContent).toBe(' ' + toName)
+    expect(row.querySelector('img, b, [onerror]')).toBeNull()
+    expect(row.querySelector('svg')).not.toBeNull()
+  })
+
+  it('renders external cancellation, service, station, platform, and journey-stop text literally', async () => {
+    const reason = 'Cancelled <img src=x onerror="window.injected=true"> &copy; "Today"'
+    const origin = 'Utrecht <b>West</b> &quot; Hub'
+    const destination = 'Amsterdam <img src=x onerror="window.injected=true"> &amp; East'
+    const category = 'IC <b>Line</b> &copy;'
+    const displayName = 'Intercity <img src=x onerror="window.injected=true"> &amp; Express'
+    const direction = 'Amsterdam <b>East</b> &quot;'
+    const originTrack = '5 <b>West</b> &copy;'
+    const destinationTrack = '7 <img src=x onerror="window.injected=true">'
+    const middle = stop('Amstel <img src=x onerror="window.injected=true"> &copy;', { track: '2 <b>South</b> &amp;' })
+    const partial = [stop(origin, { track: originTrack }), middle, stop(destination, { track: destinationTrack })]
+    const full = [stop('Before <b>West</b> &copy;'), ...partial, stop('After <img src=x onerror="window.injected=true">')]
+    const itinerary = trip({ cancelled: true, cancellationReason: reason, legs: [leg({ origin, destination, category, displayName, direction, originTrack, destinationTrack, stops: partial })] })
+    mocks.trips.mockResolvedValue([itinerary])
+    mocks.journey.mockResolvedValue(full)
+    await boot()
+    input('#from', route.fromName, route.fromCode)
+    input('#to', route.toName, route.toCode)
+    click('#plan')
+    await flush()
+    expect(element('#results .trip-cancelled').textContent).toContain(reason)
+    expect(element('#results .badge').lastChild!.textContent).toBe(category)
+    expect(element('#results').querySelector('img, b, [onerror]')).toBeNull()
+    expect(element('#results').querySelector('svg')).not.toBeNull()
+    click('#results .trip-card')
+    expect(element('#detail .detail-title-main').textContent).toBe(origin + ' - ' + destination)
+    expect(element('#detail .trip-cancelled').textContent).toContain(reason)
+    expect(element('#detail .badge').lastChild!.textContent).toBe(category)
+    expect(Array.from(element('#detail').querySelectorAll('.leg-station'), el => el.textContent)).toEqual([origin, destination])
+    expect(element('#detail .leg-service-name').textContent).toBe(displayName)
+    expect(element('#detail .leg-service-dir').textContent).toContain(direction)
+    expect(Array.from(element('#detail').querySelectorAll('.platform'), el => el.textContent)).toEqual([originTrack, destinationTrack])
+    expect(element('#detail').querySelector('img, b, [onerror]')).toBeNull()
+    click('#detail .leg-service--tap')
+    expect(Array.from(element('#stops').querySelectorAll('.stop-name'), el => el.textContent)).toEqual(partial.map(s => s.name))
+    await flush()
+    expect(element('#stops .detail-title-main').textContent).toBe(displayName)
+    expect(element('#stops .detail-title-sub').textContent).toContain(direction)
+    expect(Array.from(element('#stops').querySelectorAll('.stop-name'), el => el.textContent)).toEqual(full.map(s => s.name))
+    expect(Array.from(element('#stops').querySelectorAll('.platform'), el => el.textContent)).toEqual(full.map(s => s.track))
+    expect(element('#stops').querySelector('img, b, [onerror]')).toBeNull()
+    expect(element('#stops').querySelector('svg')).not.toBeNull()
+  })
+
+  it('renders transfer platforms and operators literally while preserving transfer icons', async () => {
+    await boot()
+    const originTrack = '9 <b>West</b> &copy;'
+    const previousOperator = 'NS<b>Rail</b>'
+    const nextOperator = 'Arriva&amp;Transit'
+    const first = leg({ operator: previousOperator, arrival: '2026-10-02T10:00:00Z' })
+    const next = leg({ operator: nextOperator, departure: '2026-10-02T10:10:00Z', originTrack })
+    api.showDetail(trip({ legs: [first, next] }))
+    const transfer = element('#detail .xfer')
+    const text = Array.from(transfer.querySelectorAll('.xfer-text'), el => el.textContent)
+    expect(text).toContain('Walk to platform ' + originTrack)
+    expect(text).toContain('Check out/in: ' + previousOperator + ' - ' + nextOperator)
+    expect(transfer.querySelector('img, b, [onerror]')).toBeNull()
+    expect(transfer.querySelector('svg')).not.toBeNull()
+  })
+})
