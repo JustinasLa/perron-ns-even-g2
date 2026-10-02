@@ -636,10 +636,7 @@ export async function fetchBoard(stationCode: string): Promise<Board> {
     if (d.actualDateTime) {
       actual = d.actualDateTime
     }
-    let delayMin = Math.round((new Date(actual).getTime() - new Date(planned).getTime()) / 60000)
-    if (delayMin < 0) {
-      delayMin = 0
-    }
+    const delayMin = delay(planned, actual)
     let track = '?'
     if (d.actualTrack) {
       track = d.actualTrack
