@@ -27,73 +27,88 @@ const PRIVACY_HTML = `<!doctype html>
 </head>
 <body>
 <h1>Privacy Policy — Perron-NS</h1>
-<p class="updated"><strong>Last updated: 28 June 2026</strong></p>
+<p class="updated"><strong>Last updated: 3 October 2026</strong></p>
 
 <p>Perron-NS ("the app") is a journey planner for Dutch Railways (NS) services,
 built for Even Realities G2 glasses and the Even Hub platform. This policy
 explains what data the app handles, why, and who it is shared with.</p>
 
 <p>The app has <strong>no user accounts, no advertising, no analytics, and no
-tracking.</strong> It does not sell or share personal data, and it collects no
-more than is needed to plan a journey.</p>
+tracking.</strong> It does not sell personal data. Its storage and
+travel-information requests are described below.</p>
 
-<h2>Data stored on your device</h2>
-<p>The following are saved <strong>locally on your device</strong> (via the
-browser <code>localStorage</code> API) and are never uploaded to us:</p>
+<h2>Data stored through Even Hub</h2>
+<p>The app saves the following through <strong>Even Hub's host-backed storage</strong>
+APIs (<code>getLocalStorage</code> and <code>setLocalStorage</code>):</p>
 <ul>
   <li><strong>Favorite locations</strong> — stations you choose to save,
   including any custom label and icon you set.</li>
   <li><strong>Recent journeys</strong> — the "Plan again" history of from/to
   routes you have planned.</li>
+  <li><strong>Language preference</strong> — your selected English or Dutch
+  interface language.</li>
 </ul>
-<p>This data stays on your device. Removing the app, clearing its storage, or
-deleting individual favorites/routes inside the app erases it. We cannot see it
-and have no copy of it.</p>
+<p>Even Hub manages this storage. Saved favorites and recent journeys are not
+uploaded as collections to our proxy. Selected station codes and language are
+used in travel-information requests as described below.</p>
 
 <h2>Data sent over the network</h2>
-<p>To show live travel information, the app sends the following to our backend
-proxy when you search or plan a journey:</p>
+<p>At startup, the app downloads the station list once. Station autocomplete
+runs locally against that list; the text you type is not sent to the proxy or NS.</p>
+<p>For live travel information, the app sends the following request fields to
+our backend proxy, which forwards them to NS:</p>
 <ul>
-  <li>The text you type to search for a station, and the station codes you
-  select.</li>
-  <li>The origin and destination station codes for a journey you plan.</li>
+  <li><strong>Departure boards and disruptions:</strong> your selected station
+  code (<code>station</code> for departures, or in the disruptions request path).</li>
+  <li><strong>Journey planning:</strong> origin and destination station codes
+  (<code>fromStation</code>, <code>toStation</code>), response language
+  (<code>lang</code>), and, when you choose a specific time, <code>dateTime</code>
+  and <code>searchForArrival</code> for arrival searches.</li>
+  <li><strong>Train stop lists:</strong> train number (<code>train</code>),
+  departure time (<code>dateTime</code>) when available, and response language
+  (<code>lang</code>).</li>
 </ul>
-<p>This data is used only to retrieve station lists, departure boards, and
-journey options. It is <strong>not</strong> linked to your identity, stored by
-the app's backend, or used for any other purpose.</p>
+<p>These fields are used to retrieve departures, disruptions, journey options,
+and train stop lists.</p>
 
 <h3>Why the app needs network access</h3>
 <p>The app declares a single <strong>network</strong> permission. It is used
-solely to fetch Dutch Railways (NS) station, departure, and journey-planning
-data through the backend described below. The app makes no other network
-connections.</p>
+to fetch Dutch Railways (NS) station, departure, disruption, journey-planning,
+and train-stop data through the backend described below.</p>
 
 <h2>Third parties</h2>
-<p>Network requests reach NS through one intermediary service that we operate:</p>
+<p>Travel-information requests reach NS through the proxy that we operate.
+Even Hub also handles the app's saved settings:</p>
 <ul>
   <li><strong>Backend proxy:</strong>
   <code>https://perron-ns-proxy.justinasla.workers.dev</code>. Operated by us
   and hosted on Cloudflare Workers. It forwards your requests to the NS
   Reisinformatie API and attaches the NS API key on the server side (the key is
-  never included in the app). The proxy does not store the contents of your
-  requests. As with any internet service, the hosting provider (Cloudflare) may
-  process standard request metadata such as IP address transiently to deliver
-  and protect the service. See
+  never included in the app). The worker code does not write request contents
+  to persistent storage. Cloudflare hosts the proxy and may process requests
+  and metadata, including IP addresses, according to its own policy. See
   <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy
   policy</a>.</li>
   <li><strong>NS Reisinformatie API</strong>
   (<code>gateway.apiportal.ns.nl</code>), operated by Nederlandse Spoorwegen
-  (NS). The station codes for your query are sent here so NS can return the
-  matching travel information. NS processes this data under its own
+  (NS). It receives the station codes, journey time and arrival-search options,
+  language, and train-number fields described above, where present, to return
+  matching travel information. NS processes these requests under its own
   <a href="https://www.ns.nl/en/privacy">privacy policy</a>.</li>
+  <li><strong>Even Hub host:</strong> handles saved favorites, recent journeys,
+  and language preferences through its storage APIs. Platform storage handling
+  is controlled by Even Hub.</li>
 </ul>
-<p>We do not share your data with anyone else.</p>
 
 <h2>Data retention</h2>
 <ul>
-  <li>On-device data (favorites, recent journeys) is kept until you delete it or
-  remove the app.</li>
-  <li>The app's backend proxy does not retain the contents of your requests.</li>
+  <li>Favorites, recent journeys, and language preferences are maintained using
+  Even Hub's host-backed storage. The app requests updates when you delete
+  saved items or change language; platform retention and deletion are
+  controlled by Even Hub.</li>
+  <li>The worker code contains no request-content storage. Retention of
+  requests or metadata processed by Cloudflare and NS is governed by those
+  providers' policies.</li>
 </ul>
 
 <h2>Children</h2>
@@ -106,7 +121,7 @@ revised policy will be published at this same location.</p>
 
 <h2>Contact</h2>
 <p>Questions about this policy or your data:<br />
-<strong>Justinas Launikonis</strong> — justinas.launikonis@gmail.com</p>
+<strong>Justinas Launikonis</strong> — justinas.launikonis@student.nhlstenden.com</p>
 </body>
 </html>`;
 
@@ -135,10 +150,12 @@ export default {
     const target = NS_BASE + url.pathname + url.search;
 
     let nsResp;
+    let body;
     try {
       nsResp = await fetch(target, {
         headers: { "Ocp-Apim-Subscription-Key": env.NS_API_KEY },
       });
+      body = await nsResp.text();
     } catch (e) {
       return new Response(
         JSON.stringify({ error: "Upstream fetch failed", detail: String(e) }),
@@ -146,7 +163,6 @@ export default {
       );
     }
 
-    const body = await nsResp.text();
     return new Response(body, {
       status: nsResp.status,
       headers: {
