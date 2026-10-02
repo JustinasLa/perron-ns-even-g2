@@ -4,6 +4,7 @@ import {
   CreateStartUpPageContainer,
   TextContainerUpgrade,
   OsEventTypeList,
+  StartUpPageCreateResult,
 } from '@evenrealities/even_hub_sdk'
 import { fetchStations, fetchTrips, fetchJourney } from './ns'
 import type { StationInfo, Trip, TripLeg, LegStop, TravelMode, TripOptions } from './ns'
@@ -260,21 +261,39 @@ const body = new TextContainerProperty({
   content: clockNow(), isEventCapture: 1,
 })
 
-const created = await bridge.createStartUpPageContainer(
-  new CreateStartUpPageContainer({ containerTotalNum: 1, textObject: [body] }),
-)
-if (created !== 0) {
-  console.error('createStartUpPageContainer failed:', created)
-}
-
-let rendering: Promise<unknown> = Promise.resolve()
+let cleanedUp = false
+let pageCreated = false
+let rendering: Promise<void> = Promise.resolve()
 async function draw(bodyText: string) {
-  rendering = rendering.then(function () {
-    return bridge.textContainerUpgrade(
+  if (cleanedUp) {
+    return
+  }
+  const update = rendering.then(async function () {
+    if (cleanedUp) {
+      return
+    }
+    if (!pageCreated) {
+      const created = await bridge.createStartUpPageContainer(
+        new CreateStartUpPageContainer({ containerTotalNum: 1, textObject: [body] }),
+      )
+      if (created !== StartUpPageCreateResult.success) {
+        console.error('createStartUpPageContainer failed:', created)
+        return
+      }
+      pageCreated = true
+    }
+    if (cleanedUp) {
+      return
+    }
+    const updated = await bridge.textContainerUpgrade(
       new TextContainerUpgrade({ containerID: BODY.id, containerName: BODY.name, content: bodyText }),
     )
+    if (!updated) {
+      throw new Error('textContainerUpgrade failed')
+    }
   })
-  await rendering
+  rendering = update.catch(function () {})
+  await update
 }
 
 const MAX_JOURNEYS = 3
@@ -582,7 +601,6 @@ function goBack(): boolean {
   return true
 }
 
-let cleanedUp = false
 function cleanup() {
   if (cleanedUp) {
     return
@@ -615,8 +633,9 @@ const unsubscribe = bridge.onEvenHubEvent(function (event) {
     if (goBack()) {
       return
     }
-    cleanup()
-    bridge.shutDownPageContainer(1)
+    bridge.shutDownPageContainer(1).catch(function (err) {
+      console.error(err)
+    })
     return
   }
   if (textType === OsEventTypeList.SCROLL_TOP_EVENT) {
@@ -635,7 +654,7 @@ const unsubscribe = bridge.onEvenHubEvent(function (event) {
     }
     return
   }
-  if (sysType === OsEventTypeList.CLICK_EVENT) {
+  if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
     if (view === 'home') {
       openTripList().catch(function (err) {
         console.error(err)
@@ -2448,14 +2467,18 @@ if (langToggle && langMenu) {
   })
 }
 
-await renderLens()
-clockTimer = setInterval(function () {
-  renderLens().catch(function (err) {
-    console.error(err)
-  })
-}, CLOCK_MS)
-tripsTimer = setInterval(function () {
-  refreshOpenTrips().catch(function (err) {
-    console.error(err)
-  })
-}, TRIPS_REFRESH_MS)
+await renderLens().catch(function (err) {
+  console.error(err)
+})
+if (!cleanedUp) {
+  clockTimer = setInterval(function () {
+    renderLens().catch(function (err) {
+      console.error(err)
+    })
+  }, CLOCK_MS)
+  tripsTimer = setInterval(function () {
+    refreshOpenTrips().catch(function (err) {
+      console.error(err)
+    })
+  }, TRIPS_REFRESH_MS)
+}

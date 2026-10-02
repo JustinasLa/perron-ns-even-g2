@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { OsEventTypeList } from '@evenrealities/even_hub_sdk'
+import { evenHubEventFromJson, OsEventTypeList, StartUpPageCreateResult } from '@evenrealities/even_hub_sdk'
 import type { LegStop, StationInfo, Trip, TripLeg } from './ns'
 
 const mocks = vi.hoisted(() => ({
@@ -154,7 +154,8 @@ beforeEach(() => {
   mocks.trips.mockResolvedValue([trip()])
   mocks.journey.mockResolvedValue([])
   mocks.bridge.setLocalStorage.mockResolvedValue(undefined)
-  mocks.bridge.textContainerUpgrade.mockResolvedValue(0)
+  mocks.bridge.textContainerUpgrade.mockResolvedValue(true)
+  mocks.bridge.shutDownPageContainer.mockResolvedValue(true)
   mocks.bridge.onEvenHubEvent.mockImplementation((handler) => { eventHandler = handler; return mocks.unsubscribe })
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -980,12 +981,13 @@ describe('defensive UI boundaries', () => {
 describe('SDK rendering failures', () => {
   async function renderingFailure(action: () => unknown) {
     const error = new Error('display disconnected')
-    api.state.rendering = Promise.resolve()
     mocks.bridge.textContainerUpgrade.mockRejectedValueOnce(error)
     action()
     await flush()
     expect(console.error).toHaveBeenCalledWith(error)
-    api.state.rendering = Promise.resolve()
+    const calls = mocks.bridge.textContainerUpgrade.mock.calls.length
+    await api.renderLens()
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(calls + 1)
     vi.mocked(console.error).mockClear()
   }
 
@@ -1004,11 +1006,9 @@ describe('SDK rendering failures', () => {
     api.state.detailTrips = [trip()]
     await renderingFailure(() => api.mirrorDetailToLens(0))
     await renderingFailure(() => api.applyLanguage())
-    await renderingFailure(() => {
-      api.state.view = 'detail'
-      api.showDetail(trip(), 0)
-      click('#detail-back')
-    })
+    api.showDetail(trip(), 0)
+    await flush()
+    await renderingFailure(() => click('#detail-back'))
     mocks.bridge.textContainerUpgrade.mockRejectedValueOnce(new Error('clock unavailable'))
     await vi.advanceTimersByTimeAsync(10000)
     expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'clock unavailable' }))
@@ -1017,11 +1017,14 @@ describe('SDK rendering failures', () => {
   it('reports refresh rendering failure', async () => {
     await boot({ routes: [route] })
     await api.openTripList()
-    api.state.rendering = Promise.resolve()
-    mocks.bridge.textContainerUpgrade.mockRejectedValueOnce(new Error('refresh unavailable'))
-    await vi.advanceTimersByTimeAsync(60000)
+    await vi.advanceTimersByTimeAsync(50000)
+    mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('refresh unavailable'))
+    await vi.advanceTimersByTimeAsync(10000)
     expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'refresh unavailable' }))
-    expect(vi.mocked(console.error).mock.calls.length).toBeGreaterThan(1)
+    expect(console.error).toHaveBeenCalledOnce()
+    const calls = mocks.bridge.textContainerUpgrade.mock.calls.length
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(calls + 1)
   })
 
   it('reports initial, success, and error lens rendering failures during phone planning', async () => {
@@ -1029,7 +1032,11 @@ describe('SDK rendering failures', () => {
     input('#from', 'ut')
     input('#to', 'Amsterdam Centraal')
     await renderingFailure(() => api.planJourney())
-    mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(0).mockRejectedValueOnce(new Error('error display unavailable'))
+    mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('result display unavailable'))
+    await api.planJourney()
+    await flush()
+    expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'result display unavailable' }))
+    mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('error display unavailable'))
     mocks.trips.mockRejectedValueOnce(new Error('offline'))
     await api.planJourney()
     await flush()
@@ -1061,5 +1068,153 @@ describe('SDK rendering failures', () => {
     api.setResults('')
     api.state.view = 'list'
     await renderingFailure(() => api.commitTime())
+  })
+})
+
+describe('SDK startup and lifecycle recovery', () => {
+  it.each([new Error('startup unavailable'), StartUpPageCreateResult.outOfMemory])('retries failed page creation without blocking the phone planner: %s', async (failure) => {
+    if (failure instanceof Error) mocks.bridge.createStartUpPageContainer.mockRejectedValueOnce(failure)
+    else mocks.bridge.createStartUpPageContainer.mockResolvedValueOnce(failure)
+    await boot()
+    expect(mocks.bridge.createStartUpPageContainer).toHaveBeenCalledOnce()
+    expect(mocks.bridge.textContainerUpgrade).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(2)
+    if (failure instanceof Error) expect(console.error).toHaveBeenCalledWith(failure)
+    else expect(console.error).toHaveBeenCalledWith('createStartUpPageContainer failed:', failure)
+    input('#from', 'ut')
+    input('#to', 'Amsterdam Centraal')
+    click('#plan')
+    await flush()
+    expect(mocks.trips).toHaveBeenCalledOnce()
+    expect(element('#results .trip-card')).toBeDefined()
+    expect(mocks.bridge.createStartUpPageContainer).toHaveBeenCalledTimes(2)
+    expect(lens()).toContain(route.toName)
+  })
+
+  it.each([new Error('initial display unavailable'), false])('keeps refresh active after a failed initial update: %s', async (failure) => {
+    if (failure instanceof Error) mocks.bridge.textContainerUpgrade.mockRejectedValueOnce(failure)
+    else mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(failure)
+    await boot()
+    expect(element('#plan')).toBeDefined()
+    expect(vi.getTimerCount()).toBe(2)
+    expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: failure instanceof Error ? failure.message : 'textContainerUpgrade failed' }))
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(mocks.bridge.createStartUpPageContainer).toHaveBeenCalledOnce()
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(2)
+    expect(lens()).toContain('Please set a route')
+  })
+
+  it('serializes queued updates and continues after an earlier rejection', async () => {
+    await boot()
+    const pending = deferred<boolean>()
+    mocks.bridge.textContainerUpgrade.mockReturnValueOnce(pending.promise)
+    const first = api.draw('first')
+    await flush()
+    const second = api.draw('second')
+    const third = api.draw('third')
+    await flush()
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(2)
+    const rejected = expect(first).rejects.toThrow('display disconnected')
+    pending.reject(new Error('display disconnected'))
+    await rejected
+    await Promise.all([second, third])
+    expect(mocks.bridge.textContainerUpgrade.mock.calls.slice(1).map(([container]) => container.content)).toEqual(['first', 'second', 'third'])
+    mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(false)
+    await expect(api.draw('failed')).rejects.toThrow('textContainerUpgrade failed')
+    await api.draw('recovered')
+    expect(lens()).toBe('recovered')
+  })
+
+  it('opens the list and detail with decoded text-container click events', async () => {
+    await boot({ routes: [route] })
+    const event = evenHubEventFromJson({ type: 'textEvent', jsonData: { Container_ID: 1, Container_Name: 'body', Event_Type: 0 } })
+    eventHandler(event)
+    await flush()
+    expect(api.state.view).toBe('list')
+    expect(mocks.trips).toHaveBeenCalledOnce()
+    eventHandler(event)
+    await flush()
+    expect(api.state.view).toBe('detail')
+    expect(lens()).toContain('ETA:')
+  })
+
+  it.each([false, new Error('exit unavailable')])('keeps navigation and refresh alive when the exit prompt does not exit: %s', async (result) => {
+    await boot({ routes: [route] })
+    if (result instanceof Error) mocks.bridge.shutDownPageContainer.mockRejectedValueOnce(result)
+    else mocks.bridge.shutDownPageContainer.mockResolvedValueOnce(result)
+    gesture(OsEventTypeList.DOUBLE_CLICK_EVENT, true)
+    await flush()
+    expect(mocks.bridge.shutDownPageContainer).toHaveBeenCalledWith(1)
+    expect(mocks.unsubscribe).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(2)
+    if (result instanceof Error) expect(console.error).toHaveBeenCalledWith(result)
+    await vi.advanceTimersByTimeAsync(10000)
+    gesture(OsEventTypeList.CLICK_EVENT)
+    await flush()
+    expect(api.state.view).toBe('list')
+    expect(lens()).toContain(route.toName)
+    gesture(OsEventTypeList.SYSTEM_EXIT_EVENT, true)
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it.each(['creation', 'update'])('does not start timers or send another update after exit during startup %s', async (operation) => {
+    const pending = deferred<any>()
+    const started = deferred<void>()
+    const method = operation === 'creation' ? mocks.bridge.createStartUpPageContainer : mocks.bridge.textContainerUpgrade
+    method.mockImplementationOnce(() => { started.resolve(); return pending.promise })
+    const starting = boot()
+    await started.promise
+    expect(element('#plan')).toBeDefined()
+    gesture(OsEventTypeList.SYSTEM_EXIT_EVENT, true)
+    pending.resolve(operation === 'creation' ? StartUpPageCreateResult.success : true)
+    await starting
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+    const calls = mocks.bridge.textContainerUpgrade.mock.calls.length
+    await api.renderLens()
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(calls)
+    if (operation === 'creation') expect(calls).toBe(0)
+  })
+
+  it('skips updates queued before cleanup and requested afterward', async () => {
+    await boot()
+    const pending = deferred<boolean>()
+    mocks.bridge.textContainerUpgrade.mockReturnValueOnce(pending.promise)
+    const first = api.draw('in flight')
+    await flush()
+    const queued = api.draw('queued')
+    gesture(OsEventTypeList.ABNORMAL_EXIT_EVENT, true)
+    const after = api.draw('after exit')
+    pending.resolve(true)
+    await Promise.all([first, queued, after])
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(2)
+    expect(lens()).toBe('in flight')
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it.each(['opening', 'refresh', 'planning'])('does not redraw a completed %s request after cleanup', async (action) => {
+    await boot({ routes: [route] })
+    if (action === 'refresh') await api.openTripList()
+    const pending = deferred<Trip[]>()
+    mocks.trips.mockReturnValueOnce(pending.promise)
+    let request: Promise<void>
+    if (action === 'planning') {
+      input('#from', 'ut')
+      input('#to', 'Amsterdam Centraal')
+      request = api.planJourney()
+    } else {
+      request = action === 'opening' ? api.openTripList() : api.refreshOpenTrips()
+    }
+    await flush()
+    gesture(OsEventTypeList.SYSTEM_EXIT_EVENT, true)
+    const calls = mocks.bridge.textContainerUpgrade.mock.calls.length
+    pending.resolve([trip()])
+    await request
+    await flush()
+    expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(calls)
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
