@@ -242,8 +242,9 @@ let planDateTime: Date | null = null
 
 function tripOpts(): TripOptions {
   const opts: TripOptions = { lang: getLang() }
-  if (planDateTime) {
-    opts.dateTime = planDateTime.toISOString()
+  if (planDateTime || planTimeMode === 'arrival') {
+    const dateTime = planDateTime || new Date()
+    opts.dateTime = dateTime.toISOString()
     opts.searchForArrival = planTimeMode === 'arrival'
   }
   return opts
@@ -2006,12 +2007,16 @@ datePrev.addEventListener('click', function () {
   if (sameDay(pickerDate, new Date())) {
     return
   }
-  pickerDate = startOfDay(new Date(pickerDate.getTime() - DAY_MS))
+  const d = new Date(pickerDate)
+  d.setDate(d.getDate() - 1)
+  pickerDate = startOfDay(d)
   clearNow()
   updateDateRow()
 })
 dateNext.addEventListener('click', function () {
-  pickerDate = startOfDay(new Date(pickerDate.getTime() + DAY_MS))
+  const d = new Date(pickerDate)
+  d.setDate(d.getDate() + 1)
+  pickerDate = startOfDay(d)
   clearNow()
   updateDateRow()
 })
