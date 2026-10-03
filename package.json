@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.5",
   "type": "module",
+  "engines": {
+    "node": "^20.17.0 || ^22.13.0 || >=23.5.0"
+  },
   "description": "Glanceable NS (Dutch Railways) departures for Even Realities G2 — Even Hub app.",
   "scripts": {
     "dev": "vite",
