@@ -223,11 +223,6 @@ export function setLang(lang: Lang): void {
   current = lang
 }
 
-export function toggleLang(): Lang {
-  current = current === 'en' ? 'nl' : 'en'
-  return current
-}
-
 export function t(key: StringKey): string {
   return STRINGS[current][key] || en[key]
 }

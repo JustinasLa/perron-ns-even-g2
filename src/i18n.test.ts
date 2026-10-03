@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { LANGS, dateLocale, getLang, setLang, t, toggleLang } from './i18n'
+import { LANGS, dateLocale, getLang, setLang, t } from './i18n'
 
 afterEach(() => setLang('en'))
 
@@ -16,10 +16,5 @@ describe('localization', () => {
     expect(getLang()).toBe('nl')
     expect(dateLocale()).toBe('nl-NL')
     expect(t('loadingTimes')).toBe('Loading times...')
-  })
-
-  it('toggles in both directions', () => {
-    expect(toggleLang()).toBe('nl')
-    expect(toggleLang()).toBe('en')
   })
 })
