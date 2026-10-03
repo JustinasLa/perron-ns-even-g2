@@ -897,6 +897,79 @@ describe('time picker', () => {
     expect(api.dayLabel(new Date(now.getTime() + 86400000 * 3))).not.toMatch(/Today|Tomorrow|Yesterday/)
   })
 
+  it.each([
+    { now: '2026-03-29T12:00:00+02:00', today: '2026-03-29T00:00:00+01:00', tomorrow: '2026-03-30T00:00:00+02:00', afterTomorrow: '2026-03-31T00:00:00+02:00', offset: -120 },
+    { now: '2026-10-25T12:00:00+01:00', today: '2026-10-25T00:00:00+02:00', tomorrow: '2026-10-26T00:00:00+01:00', afterTomorrow: '2026-10-27T00:00:00+01:00', offset: -60 },
+  ])('moves calendar days across Amsterdam DST on $now', async ({ now, today, tomorrow, afterTomorrow, offset }) => {
+    vi.stubEnv('TZ', 'Europe/Amsterdam')
+    try {
+      vi.setSystemTime(new Date(now))
+      await boot()
+      expect(new Date().getTimezoneOffset()).toBe(offset)
+      click('#dep-box')
+      expect(api.state.pickerDate.getTime()).toBe(new Date(today).getTime())
+      click('#date-next')
+      expect(api.state.pickerDate.getTime()).toBe(new Date(tomorrow).getTime())
+      expect(element('#date-label').textContent).toBe('Tomorrow')
+      expect(element<HTMLButtonElement>('#date-prev').disabled).toBe(false)
+      click('#date-next')
+      expect(api.state.pickerDate.getTime()).toBe(new Date(afterTomorrow).getTime())
+      click('#date-prev')
+      expect(api.state.pickerDate.getTime()).toBe(new Date(tomorrow).getTime())
+      click('#date-prev')
+      expect(api.state.pickerDate.getTime()).toBe(new Date(today).getTime())
+      expect(element('#date-label').textContent).toBe('Today')
+      expect(element<HTMLButtonElement>('#date-prev').disabled).toBe(true)
+      click('#date-prev')
+      expect(api.state.pickerDate.getTime()).toBe(new Date(today).getTime())
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it.each(['default', 'now'])('uses fresh timestamps for arrival searches with %s time', async (selection) => {
+    await boot({ routes: [route] })
+    click('#saved .chip')
+    await flush()
+    click('#dep-box')
+    click('#tab-arr')
+    if (selection === 'now') {
+      click('#date-next')
+      api.state.hourWheel.set(8)
+      api.state.minWheel.set(5)
+      click('#time-now')
+    }
+    click('#time-done')
+    await flush()
+    expect(element('#dep-label').textContent).toBe('Arrival:')
+    expect(element('#dep-value').textContent).toBe(' now')
+    expect(api.state.planDateTime).toBeNull()
+    expect(mocks.trips).toHaveBeenLastCalledWith(route.fromCode, route.toCode, {
+      lang: 'en', dateTime: '2026-10-02T10:15:00.000Z', searchForArrival: true,
+    })
+    vi.setSystemTime(new Date('2026-10-02T10:35:00Z'))
+    await api.refreshOpenTrips()
+    expect(mocks.trips).toHaveBeenLastCalledWith(route.fromCode, route.toCode, {
+      lang: 'en', dateTime: '2026-10-02T10:35:00.000Z', searchForArrival: true,
+    })
+    const requestCount = mocks.trips.mock.calls.length
+    click('#dep-box')
+    click('#tab-dep')
+    click('#date-next')
+    api.state.hourWheel.set(8)
+    click('#time-cancel')
+    expect(api.state.planTimeMode).toBe('arrival')
+    expect(api.state.planDateTime).toBeNull()
+    expect(mocks.trips).toHaveBeenCalledTimes(requestCount)
+    vi.setSystemTime(new Date('2026-10-02T10:45:00Z'))
+    expect(api.tripOpts()).toEqual({
+      lang: 'en', dateTime: '2026-10-02T10:45:00.000Z', searchForArrival: true,
+    })
+    click('#dep-box')
+    expect(api.state.pickerMode).toBe('arrival')
+    expect(api.state.pickerIsNow).toBe(true)
+  })
+
   it('selects arrival/departure, days and wheel values, commits, reopens, and resets to now', async () => {
     await boot()
     click('#dep-box')
