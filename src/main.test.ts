@@ -1097,12 +1097,12 @@ describe('glasses navigation and refresh', () => {
     api.state.journeyIdx = 9
     expect(api.lensContent()).toContain('> 1.')
     await api.openTripList()
-    api.state.detailTrips = [trip({ legs: [], cancelled: true }), trip({ cancelled: true, cancellationReason: 'Track work', legs: [leg({ mode: 'BUS', originTrack: '', destinationTrack: '' }), leg({ mode: 'OTHER', departure: '2026-10-02T10:40:00Z' })] })]
+    api.state.detailTrips = [trip({ legs: [], cancelled: true }), trip({ cancelled: true, cancellationReason: 'Track work', legs: [leg({ mode: 'BUS', displayName: 'Bus', service: 'Bus 320', trainNumber: '320', originTrack: '', destinationTrack: '' }), leg({ mode: 'OTHER', departure: '2026-10-02T10:40:00Z' })] })]
     api.state.tripIdx = 9
     expect(api.listContent()).toContain('CANCELLED')
     expect(api.state.tripIdx).toBe(1)
     expect(api.detailContent()).toContain('CANCELLED — Track work')
-    expect(api.detailContent()).toContain('Bus · Trip:')
+    expect(api.detailContent()).toContain('Bus 320 · Trip:')
     expect(api.detailContent()).toContain('Change (0 min)')
     api.state.tripIdx = 0
     expect(api.detailContent()).toContain('CANCELLED')
@@ -1125,7 +1125,7 @@ describe('glasses navigation and refresh', () => {
     api.state.detailRoute = route
     api.state.detailTrips = [trip({ legs: [leg({ arrival: '2026-10-02T10:30:00Z' }), leg({ departure: '2026-10-02T10:35:00Z' })] })]
     api.state.detailStatus = 'ready'
-    expect(api.detailContent()).toContain('Change (5 min)')
+    expect(api.detailContent()).toContain('Change (4 min)')
   })
 
   it('cleans up safely when refresh timers have not been assigned', async () => {
@@ -1155,18 +1155,19 @@ describe('journey presentation and stops', () => {
     expect(api.delayTag(2)).toBe(' +2')
     expect(api.delayBadge(0)).toBe('')
     expect(api.stopTimeLine('', 0)).toBe('')
-    expect(api.gapMinutes('2026-10-02T10:00:00Z', '2026-10-02T09:00:00Z')).toBe(0)
+    expect(api.gapMinutes(leg({ arrival: '2026-10-02T10:00:00Z' }), leg({ departure: '2026-10-02T09:00:00Z' }))).toBe(0)
     expect(api.fmtDateHeader(new Date().toISOString())).toContain('Today,')
     expect(api.fmtDateHeader('2026-01-01T12:00:00Z')).not.toContain('Today')
     for (const [mode, label] of [['BUS', 'Bus'], ['TRAM', 'Tram'], ['METRO', 'Metro'], ['FERRY', 'Ferry'], ['WALK', 'Walk'], ['OTHER', '']]) {
       expect(api.modeLabel(mode)).toBe(label)
-      expect(api.legBadgeLabel(leg({ mode: mode as TripLeg['mode'], category: '' }))).toBe(label || 'Train')
+      expect(api.legBadgeLabel(leg({ mode: mode as TripLeg['mode'], category: '', displayName: '', service: '', trainNumber: '' }))).toBe(label || 'Train')
     }
     for (const crowd of ['LOW', 'MEDIUM', 'HIGH', 'UNKNOWN']) {
       expect(api.crowdInline(crowd)).toContain('ctext--' + crowd.toLowerCase())
       expect(api.crowdBadge(crowd)).toEqual(crowd === 'UNKNOWN' ? '' : expect.stringContaining('crowd--' + crowd.toLowerCase()))
     }
-    expect(api.serviceBadges([leg({ mode: 'WALK' }), leg({ mode: 'BUS', category: '' })])).toContain('Bus')
+    expect(api.legBadgeLabel(leg({ category: '' }))).toBe('Train')
+    expect(api.serviceBadges([leg({ mode: 'WALK' }), leg({ mode: 'BUS', category: '', displayName: 'Bus' })])).toContain('Bus')
     expect(api.icon('unknown')).toBe('')
     expect(console.warn).toHaveBeenCalledWith('missing icon:', 'unknown')
     expect(api.icon('Guide System/Go')).toContain('width="18"')
@@ -1192,8 +1193,8 @@ describe('journey presentation and stops', () => {
 
   it('renders leg stops, transfer waits, changed operators, and walk-only routes', async () => {
     await boot()
-    const first = leg({ operator: 'NS Rail', arrival: '2026-10-02T10:00:00Z', walkToNextMin: 3 })
-    const next = leg({ operator: 'Arriva Rail', departure: '2026-10-02T10:10:00Z', originTrack: '9' })
+    const first = leg({ operator: 'NS Rail', arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 0, walkToNextMin: 3 })
+    const next = leg({ operator: 'Arriva Rail', departure: '2026-10-02T10:10:00Z', departureDelayMin: 0, originTrack: '9' })
     expect(api.transferBlock(first, next)).toContain('7 min')
     expect(api.transferBlock(first, next)).toContain('Check out/in: NS - Arriva')
     expect(api.transferBlock(first, next)).toContain('Walk to platform 9')
@@ -1206,6 +1207,243 @@ describe('journey presentation and stops', () => {
     const mixed = trip({ legs: [first, { ...next, mode: 'WALK' }] })
     expect(api.buildDetail(mixed)).toContain('xfer-row')
     expect(api.buildSummary(mixed)).toContain('gap-badge')
+  })
+
+  it('uses delayed arrivals and departures for every transfer display', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 8, walkToNextMin: 3 })
+    const next = leg({ departure: '2026-10-02T10:10:00Z', departureDelayMin: 0 })
+    const itinerary = trip({ legs: [first, next] })
+    api.state.detailRoute = route
+    api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
+    api.showDetail(itinerary)
+    expect(api.gapMinutes(first, next)).toBe(2)
+    expect(element('.gap-badge').textContent).toBe('2min')
+    expect(api.detailContent()).toContain('Change (2 min)')
+    expect(element('.xfer').textContent).toContain('3 min')
+    expect(element('.xfer').textContent).not.toContain('Wait')
+    expect(api.gapMinutes(first, { ...next, departureDelayMin: 12 })).toBe(14)
+    expect(api.gapMinutes({ ...first, arrivalDelayMin: 15 }, next)).toBe(0)
+    expect(api.gapMinutes({ ...first, arrival: '' }, next)).toBe(0)
+    expect(api.gapMinutes(first, { ...next, departure: 'invalid' })).toBe(0)
+    expect(api.gapMinutes({ ...first, arrival: '2026-10-02T23:59:00Z', arrivalDelayMin: 2 }, { ...next, departure: '2026-10-03T00:03:00Z' })).toBe(2)
+    expect(api.gapMinutes({ ...first, arrival: '2026-10-02T10:10:00Z', arrivalDelayMin: 0 }, { ...next, departure: '2026-10-02T10:00:00Z', departureDelayMin: 15 })).toBe(5)
+  })
+
+  it('shows endpoint delays consistently in phone cards, summaries, and legs', async () => {
+    await boot()
+    const first = leg({ departureDelayMin: 5, arrivalDelayMin: 8 })
+    const next = leg({ departureDelayMin: 0, arrivalDelayMin: 13 })
+    const itinerary = trip({ legs: [first, next] })
+    api.renderTrips([itinerary])
+    api.showDetail(itinerary)
+    expect(Array.from(document.querySelectorAll('#results .trip-time .delay'), (el) => el.textContent)).toEqual([' +5', ' +13'])
+    expect(Array.from(document.querySelectorAll('#detail .summary .delay'), (el) => el.textContent)).toEqual([' +5', ' +13'])
+    expect(Array.from(document.querySelectorAll('#detail .leg-time'), (el) => el.textContent)).toEqual([
+      api.fmtTime(first.departure) + ' +5', api.fmtTime(first.arrival) + ' +8',
+      api.fmtTime(next.departure), api.fmtTime(next.arrival) + ' +13',
+    ])
+    expect(api.tripDelays(trip({ legs: [] }))).toEqual({ departure: 0, arrival: 0 })
+  })
+
+  it('keeps bus line identifiers on phone cards, details, stops, and the lens', async () => {
+    await boot()
+    const bus = leg({ mode: 'BUS', category: 'BUS', displayName: 'Bus', service: 'Bus 320', trainNumber: '320' })
+    const itinerary = trip({ legs: [bus] })
+    api.state.detailRoute = route
+    api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
+    api.renderTrips([itinerary])
+    api.showDetail(itinerary)
+    expect(element('#results .badge').textContent?.trim()).toBe('Bus 320')
+    expect(element('#detail .badge').textContent?.trim()).toBe('Bus 320')
+    expect(element('.leg-service-name').textContent).toBe('Bus 320')
+    expect(api.buildStops(bus, bus.stops, 0, 2)).toContain('Bus 320')
+    expect(api.detailContent()).toContain('Bus 320 · Trip:')
+    expect(api.legServiceLabel({ ...bus, displayName: 'Bus 320' })).toBe('Bus 320')
+    expect(api.legServiceLabel({ ...bus, displayName: '', trainNumber: '' })).toBe('Bus 320')
+    expect(api.legServiceLabel({ ...bus, trainNumber: '' })).toBe('Bus 320')
+    expect(api.legServiceLabel({ ...bus, trainNumber: '', service: '' })).toBe('Bus')
+    expect(api.legServiceLabel({ ...bus, trainNumber: '', service: '', displayName: '' })).toBe('Bus')
+    expect(api.legServiceLabel(leg({ trainNumber: '', service: '', displayName: '' }))).toBe('Train')
+    expect(api.legServiceLabel(leg({ trainNumber: '', service: 'IC', displayName: 'Intercity' }))).toBe('Intercity')
+  })
+
+  it('shows explicit walking legs once and preserves positive waits beside them', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 0, operator: '' })
+    const walk = leg({ mode: 'WALK', category: 'WALK', displayName: 'Walking', service: 'Walk', trainNumber: '', operator: '', stops: [], departure: first.arrival, departureDelayMin: 0, arrival: '2026-10-02T10:03:00Z', arrivalDelayMin: 0, durationMin: 3 })
+    const next = leg({ departure: walk.arrival, departureDelayMin: 0, operator: '' })
+    const itinerary = trip({ legs: [first, walk, next] })
+    api.state.detailRoute = route
+    api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
+    api.showDetail(itinerary)
+    expect(Array.from(document.querySelectorAll('#detail .badge'), (el) => el.textContent?.trim())).toEqual(['IC', 'Walk 3 min', 'IC'])
+    expect(document.querySelector('#detail .gap-badge')).toBeNull()
+    expect(document.querySelector('#detail .xfer-row')).toBeNull()
+    expect(api.detailContent()).toContain('Walk · Trip: 3 min')
+    expect(api.detailContent()).not.toContain('Change (0 min)')
+    const waitingWalk = { ...walk, departure: '2026-10-02T10:02:00Z', arrival: '2026-10-02T10:05:00Z' }
+    const waitingTrip = trip({ legs: [first, waitingWalk, { ...next, departure: '2026-10-02T10:10:00Z' }] })
+    api.state.detailTrips = [waitingTrip]
+    api.showDetail(waitingTrip)
+    expect(Array.from(document.querySelectorAll('#detail .gap-badge'), (el) => el.textContent)).toEqual(['2min', '5min'])
+    expect(Array.from(document.querySelectorAll('#detail .xfer-text'), (el) => el.textContent)).toEqual(['Wait', 'Wait'])
+    expect(Array.from(document.querySelectorAll('#detail .xfer-left'), (el) => el.textContent)).toEqual(['2 min', '5 min'])
+    expect(api.detailContent()).toContain('Wait (2 min)')
+    expect(api.detailContent()).toContain('Wait (5 min)')
+  })
+
+  it('carries an incoming delay through walking times and later connection gaps', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 8, operator: '' })
+    const walk = leg({ mode: 'WALK', departure: first.arrival, departureDelayMin: 0, arrival: '2026-10-02T10:03:00Z', arrivalDelayMin: 0, durationMin: 3, operator: '', trainNumber: '', stops: [] })
+    const next = leg({ departure: '2026-10-02T10:10:00Z', departureDelayMin: 0, operator: '' })
+    const itinerary = trip({ legs: [first, walk, next] })
+    api.state.detailRoute = route
+    api.state.detailStatus = 'ready'
+    api.state.detailTrips = [itinerary]
+    api.showDetail(itinerary)
+    const walkingTimes = document.querySelectorAll('#detail .leg')[1].querySelectorAll('.leg-time')
+    expect(Array.from(walkingTimes, (el) => el.textContent)).toEqual([api.fmtTime(walk.departure) + ' +8', api.fmtTime(walk.arrival) + ' +8'])
+    expect(document.querySelector('#detail .gap-badge')).toBeNull()
+    expect(document.querySelector('#detail .xfer-row')).toBeNull()
+    expect(api.detailContent()).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(api.detailContent()).not.toContain('Wait')
+    expect(walk.departureDelayMin).toBe(0)
+    expect(walk.arrivalDelayMin).toBe(0)
+    const feasible = trip({ legs: [{ ...first, arrivalDelayMin: 5 }, walk, next] })
+    api.state.detailTrips = [feasible]
+    api.showDetail(feasible)
+    expect(element('#detail .gap-badge').textContent).toBe('2min')
+    expect(element('#detail .xfer-left').textContent).toBe('2 min')
+    expect(element('#detail .xfer-text').textContent).toBe('Wait')
+    expect(api.detailContent()).toContain('Wait (2 min)')
+    const endingWalk = trip({ legs: [first, walk], arrival: walk.arrival })
+    api.state.detailTrips = [endingWalk]
+    api.renderTrips([endingWalk])
+    api.showDetail(endingWalk)
+    expect(api.tripDelays(endingWalk).arrival).toBe(8)
+    expect(element('#results .trip-time').textContent).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(element('#detail .summary .trip-time').textContent).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(api.listContent()).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(api.detailContent()).toContain('ETA: ' + api.fmtTime(walk.arrival) + ' +8')
+  })
+
+  it('propagates walking delays across midnight and consecutive legs without accumulating them twice', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T23:59:00Z', arrivalDelayMin: 8 })
+    const walk = leg({ mode: 'WALK', departure: first.arrival, departureDelayMin: 2, arrival: '2026-10-03T00:02:00Z', arrivalDelayMin: 2, durationMin: 3 })
+    const secondWalk = { ...walk, departure: walk.arrival, departureDelayMin: 0, arrival: '2026-10-03T00:06:00Z', arrivalDelayMin: 0, durationMin: 4 }
+    const next = leg({ departure: '2026-10-03T00:17:00Z', departureDelayMin: 0 })
+    const effective = api.effectiveLegs([first, walk, secondWalk, next])
+    expect(effective[0]).toBe(first)
+    expect(effective[3]).toBe(next)
+    expect(effective.slice(1, 3).map((item: TripLeg) => [item.departureDelayMin, item.arrivalDelayMin])).toEqual([[8, 8], [8, 8]])
+    expect(api.gapMinutes(effective[2], effective[3])).toBe(3)
+    expect(api.effectiveLegs(effective)).toEqual(effective)
+    expect(api.effectiveLegs([{ ...first, arrival: '' }, walk])[1]).toBe(walk)
+    const alreadyDelayed = { ...walk, departureDelayMin: 9, arrivalDelayMin: 9 }
+    expect(api.effectiveLegs([first, alreadyDelayed])[1]).toBe(alreadyDelayed)
+  })
+
+  it('retains numbered API service names when product numbers are absent', async () => {
+    await boot()
+    for (const service of [
+      leg({ mode: 'BUS', displayName: 'Lijnbus', service: 'Bus 320', trainNumber: '' }),
+      leg({ displayName: 'Intercity', service: 'IC 1429', trainNumber: '' }),
+    ]) {
+      const itinerary = trip({ legs: [service] })
+      api.state.detailRoute = route
+      api.state.detailTrips = [itinerary]
+      api.state.detailStatus = 'ready'
+      api.showDetail(itinerary)
+      expect(element('.leg-service-name').textContent).toBe(service.service)
+      expect(api.buildStops(service, service.stops, 0, 2)).toContain(service.service)
+      expect(api.detailContent()).toContain(service.service + ' · Trip:')
+    }
+  })
+
+  it('labels unknown walking time honestly and omits empty transfer rows', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 0, walkToNextMin: null })
+    const next = leg({ departure: '2026-10-02T10:10:00Z', departureDelayMin: 0 })
+    const transfer = api.transferBlock(first, next)
+    expect(transfer).toContain('10 min')
+    expect(transfer).toContain('Transfer time')
+    expect(transfer).not.toContain('Walk to')
+    expect(transfer).not.toContain('Wait')
+    expect(api.transferBlock(first, { ...next, departure: first.arrival })).toBe('')
+    expect(api.transferBlock({ ...first, walkToNextMin: 0 }, { ...next, departure: first.arrival })).toBe('')
+    expect(api.transferBlock({ ...first, walkToNextMin: 0 }, next)).toContain('Wait')
+    expect(api.transferBlock({ ...first, mode: 'WALK' }, { ...next, departure: first.arrival, operator: 'Arriva' })).toContain('Check out/in')
+  })
+
+  it('marks cancelled legs and individual stops without boarding instructions', async () => {
+    await boot()
+    const cancelledLeg = leg({ cancelled: true, trainNumber: '' })
+    const itinerary = trip({ legs: [cancelledLeg], cancelled: true })
+    api.state.detailRoute = route
+    api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
+    api.showDetail(itinerary)
+    expect(element('.leg.cancelled .leg-service-meta').textContent).toBe('Cancelled')
+    expect(api.detailContent()).toContain('IC 123 · CANCELLED')
+    api.showStops(cancelledLeg)
+    expect(document.querySelectorAll('#stops .stop.cancelled')).toHaveLength(3)
+    expect(element('#stops').textContent).not.toContain('Board here')
+    expect(element('#stops').textContent).not.toContain('Get off here')
+    expect(element('#stops .leg-cancelled').textContent).toBe('Cancelled')
+    for (const index of [0, 1, 2]) {
+      const html = api.stopRow(stop('Skipped stop', { cancelled: true }), index, 3, 0, 2)
+      expect(html).toContain('class="stop cancelled"')
+      expect(html).toContain('Cancelled')
+      expect(html).not.toContain('Board here')
+      expect(html).not.toContain('Get off here')
+    }
+    expect(api.stopRow(stop('Running stop'), 1, 3, 0, 2)).not.toContain('Cancelled')
+  })
+
+  it('limits leg cancellation to the travelled segment of a fetched full route', async () => {
+    await boot()
+    const cancelledLeg = leg({ cancelled: true, origin: 'B', destination: 'D', stops: [stop('B'), stop('C'), stop('D')] })
+    const full = ['A', 'B', 'C', 'D', 'E'].map((name) => stop(name))
+    mocks.journey.mockResolvedValueOnce(full)
+    api.showStops(cancelledLeg)
+    await flush()
+    expect(Array.from(document.querySelectorAll('#stops .stop.cancelled .stop-name'), (el) => el.textContent)).toEqual(['B', 'C', 'D'])
+    expect(element('#stops').textContent).not.toContain('Board here')
+    expect(element('#stops').textContent).not.toContain('Get off here')
+    mocks.journey.mockResolvedValueOnce([{ ...full[0], cancelled: true }, ...full.slice(1)])
+    api.showStops(cancelledLeg)
+    await flush()
+    expect(Array.from(document.querySelectorAll('#stops .stop.cancelled .stop-name'), (el) => el.textContent)).toEqual(['A', 'B', 'C', 'D'])
+  })
+
+  it('localizes walking, durations, exit sides, transfer time, and cancellations', async () => {
+    await boot({ lang: 'nl' })
+    expect(api.legDurationText(65)).toBe('1:05 u')
+    expect(api.legDurationText(3)).toBe('3 min')
+    expect(api.legCard(leg({ exitSide: 'LEFT' }), 0)).toContain('Uitstapzijde links')
+    expect(api.legCard(leg({ exitSide: 'right' }), 0)).toContain('Uitstapzijde rechts')
+    expect(api.exitSideText('UNKNOWN')).toBe('unknown')
+    expect(api.serviceBadges([leg({ mode: 'WALK', durationMin: 3 })])).toContain('Lopen 3 min')
+    const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 0, walkToNextMin: null })
+    const next = leg({ departure: '2026-10-02T10:10:00Z', departureDelayMin: 0 })
+    expect(api.transferBlock(first, next)).toContain('Overstaptijd')
+    expect(api.transferBlock({ ...first, mode: 'WALK' }, next)).toContain('Wachten')
+    expect(api.buildSummary(trip({ cancelled: true }))).toContain('Geannuleerd')
+    expect(api.legCard(leg({ cancelled: true }), 0)).toContain('Geannuleerd')
+    expect(api.stopRow(stop('Skipped stop', { cancelled: true }), 0, 1, 0, 0)).toContain('Geannuleerd')
+    api.state.detailRoute = route
+    api.state.detailStatus = 'ready'
+    api.state.detailTrips = [trip({ cancelled: true, legs: [leg({ cancelled: true })] })]
+    expect(api.listContent()).toContain('GEANNULEERD')
+    expect(api.detailContent()).toContain('Intercity 123 · GEANNULEERD')
+    api.state.detailTrips = [trip({ durationMin: 65 })]
+    expect(api.listContent()).toContain('1:05u')
   })
 
   it('opens stops by click and keyboard, fetches the full route, and marks the travel segment', async () => {
@@ -1869,14 +2107,14 @@ describe('literal planner text', () => {
     expect(element('#detail .trip-cancelled').textContent).toContain(reason)
     expect(element('#detail .badge').lastChild!.textContent).toBe(category)
     expect(Array.from(element('#detail').querySelectorAll('.leg-station'), el => el.textContent)).toEqual([origin, destination])
-    expect(element('#detail .leg-service-name').textContent).toBe(displayName)
+    expect(element('#detail .leg-service-name').textContent).toBe(displayName + ' 123')
     expect(element('#detail .leg-service-dir').textContent).toContain(direction)
     expect(Array.from(element('#detail').querySelectorAll('.platform'), el => el.textContent)).toEqual([originTrack, destinationTrack])
     expect(element('#detail').querySelector('img, b, [onerror]')).toBeNull()
     click('#detail .leg-service--tap')
     expect(Array.from(element('#stops').querySelectorAll('.stop-name'), el => el.textContent)).toEqual(partial.map(s => s.name))
     await flush()
-    expect(element('#stops .detail-title-main').textContent).toBe(displayName)
+    expect(element('#stops .detail-title-main').textContent).toBe(displayName + ' 123')
     expect(element('#stops .detail-title-sub').textContent).toContain(direction)
     expect(Array.from(element('#stops').querySelectorAll('.stop-name'), el => el.textContent)).toEqual(full.map(s => s.name))
     expect(Array.from(element('#stops').querySelectorAll('.platform'), el => el.textContent)).toEqual(full.map(s => s.track))

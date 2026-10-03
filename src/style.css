@@ -380,6 +380,16 @@ input:focus { outline: none; box-shadow: inset 0 -2px 0 0 var(--ink); }
 .summary.cancelled .trip-meta {
   text-decoration: line-through;
 }
+.leg.cancelled .leg-time,
+.leg.cancelled .leg-dur,
+.leg.cancelled .leg-station,
+.stop.cancelled .stop-time,
+.stop.cancelled .stop-name,
+.stop.cancelled .platform {
+  text-decoration: line-through;
+}
+.leg-cancelled,
+.stop-cancelled { color: var(--red); }
 .trip-head {
   display: flex;
   justify-content: space-between;

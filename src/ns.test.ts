@@ -108,6 +108,7 @@ describe('fetchTrips', () => {
     expect(leg.service).toBe('IC 1429')
     expect(leg.category).toBe('IC')
     expect(leg.displayName).toBe('Intercity')
+    expect(leg.trainNumber).toBe('')
     expect(leg.operator).toBe('NS')
     expect(leg.direction).toBe('Amsterdam Centraal')
     expect(leg.origin).toBe('Utrecht Centraal')
@@ -167,6 +168,7 @@ describe('fetchTrips', () => {
 
     const leg = (await fetchTrips('LLS', 'GN'))[0].legs[0]
     expect(leg.stops.map((s) => s.name)).toEqual(['Lelystad Centrum', 'Zwolle', 'Groningen'])
+    expect(leg.intermediateStops).toBe(1)
     expect(leg.stops[0].track).toBe('2')
     expect(leg.stops[1].departureDelayMin).toBe(1) // actual 06:16 vs planned 06:15
     expect(leg.stops[1].track).toBe('7') // actual departure track preferred
@@ -272,7 +274,7 @@ describe('fetchTrips', () => {
               transfers: 5,
               legs: [
                 { name: 'Walk', travelType: 'WALK', origin: { name: 'A' }, destination: { name: 'B' } },
-                { name: 'Bus 50', product: { type: 'BUS' }, origin: { name: 'B' }, destination: { name: 'C' } },
+                { name: 'Bus 50', product: { type: 'BUS', displayName: 'Lijnbus' }, origin: { name: 'B' }, destination: { name: 'C' } },
                 { name: 'Tram 2', product: { type: 'TRAM' }, origin: { name: 'C' }, destination: { name: 'D' } },
                 { name: 'Metro 51', product: { type: 'METRO' }, origin: { name: 'D' }, destination: { name: 'E' } },
                 { name: 'Veerboot', product: { displayName: 'Veerdienst' }, origin: { name: 'E' }, destination: { name: 'F' } },
@@ -284,8 +286,10 @@ describe('fetchTrips', () => {
       },
     ])
 
-    const modes = (await fetchTrips('A', 'G'))[0].legs.map((l) => l.mode)
+    const legs = (await fetchTrips('A', 'G'))[0].legs
+    const modes = legs.map((l) => l.mode)
     expect(modes).toEqual(['WALK', 'BUS', 'TRAM', 'METRO', 'FERRY', 'TRAIN'])
+    expect(legs[1]).toMatchObject({ service: 'Bus 50', displayName: 'Lijnbus', trainNumber: '' })
   })
 
   it('returns an empty array when the payload has no trips', async () => {
@@ -568,7 +572,7 @@ describe('NS response edge cases', () => {
 
   it('limits error text to 80 characters', async () => {
     mockFetch([{ match: '/v3/trips', value: jsonResponse('x'.repeat(100), { ok: false, status: 500 }) }])
-    await expect(fetchTrips('A', 'B')).rejects.toThrow('NS 500: ' + 'x'.repeat(80))
+    await expect(fetchTrips('A', 'B')).rejects.toHaveProperty('message', 'NS 500: ' + 'x'.repeat(80))
   })
 
   it.each([false, true])('reports status even when error body is unreadable: %s', async (rejectBody) => {
