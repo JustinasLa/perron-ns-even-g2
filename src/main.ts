@@ -1443,12 +1443,7 @@ function modeSquare(mode: TravelMode): string {
 
 function legDurationText(min: number): string {
   if (min >= 60) {
-    const h = Math.floor(min / 60)
-    let mm = String(min % 60)
-    if (mm.length < 2) {
-      mm = '0' + mm
-    }
-    return h + ':' + mm + ' ' + tr('hourShort')
+    return fmtDuration(min) + ' ' + tr('hourShort')
   }
   return min + ' ' + tr('minShort')
 }

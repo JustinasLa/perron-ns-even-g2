@@ -1216,6 +1216,7 @@ describe('journey presentation and stops', () => {
     const itinerary = trip({ legs: [first, next] })
     api.state.detailRoute = route
     api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
     api.showDetail(itinerary)
     expect(api.gapMinutes(first, next)).toBe(2)
     expect(element('.gap-badge').textContent).toBe('2min')
@@ -1252,6 +1253,7 @@ describe('journey presentation and stops', () => {
     const itinerary = trip({ legs: [bus] })
     api.state.detailRoute = route
     api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
     api.renderTrips([itinerary])
     api.showDetail(itinerary)
     expect(element('#results .badge').textContent?.trim()).toBe('Bus 320')
@@ -1276,6 +1278,7 @@ describe('journey presentation and stops', () => {
     const itinerary = trip({ legs: [first, walk, next] })
     api.state.detailRoute = route
     api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
     api.showDetail(itinerary)
     expect(Array.from(document.querySelectorAll('#detail .badge'), (el) => el.textContent?.trim())).toEqual(['IC', 'Walk 3 min', 'IC'])
     expect(document.querySelector('#detail .gap-badge')).toBeNull()
@@ -1355,6 +1358,7 @@ describe('journey presentation and stops', () => {
       const itinerary = trip({ legs: [service] })
       api.state.detailRoute = route
       api.state.detailTrips = [itinerary]
+      api.state.detailStatus = 'ready'
       api.showDetail(itinerary)
       expect(element('.leg-service-name').textContent).toBe(service.service)
       expect(api.buildStops(service, service.stops, 0, 2)).toContain(service.service)
@@ -1383,6 +1387,7 @@ describe('journey presentation and stops', () => {
     const itinerary = trip({ legs: [cancelledLeg], cancelled: true })
     api.state.detailRoute = route
     api.state.detailTrips = [itinerary]
+    api.state.detailStatus = 'ready'
     api.showDetail(itinerary)
     expect(element('.leg.cancelled .leg-service-meta').textContent).toBe('Cancelled')
     expect(api.detailContent()).toContain('IC 123 · CANCELLED')
