@@ -102,6 +102,27 @@ npm run dev          # Vite dev server on http://localhost:5173
 npm run simulate     # G2 simulator (use simulate:auto for the automation API)
 ```
 
+### Tests and coverage
+
+```bash
+npm test             # run all tests and enforce 100% coverage
+npm run test:watch   # watch tests while editing
+npm run test:coverage
+```
+
+The coverage command writes an HTML report to `coverage/index.html` and requires
+100% statements, branches, functions, and lines in each production module:
+the phone and glasses app, NS client, localization, and Cloudflare proxy. CI runs
+the same coverage gate before packaging. Tests and TypeScript declaration files
+are the only source files excluded from coverage.
+
+The UI tests run in jsdom with fake clocks and mocked SDK and network boundaries.
+They cover planner interactions, glasses gestures, storage, scheduled refreshes,
+stop lists, time selection, localization, and failures. A test-only Vite transform
+exposes the entrypoint's private helpers and state for boundary tests while
+preserving source maps. It is defined in `vitest.config.ts` and does not run in
+development or production builds.
+
 Sideload to real glasses or build a package:
 
 ```bash

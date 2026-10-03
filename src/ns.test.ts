@@ -490,3 +490,121 @@ describe('fetchStations', () => {
     ])
   })
 })
+
+describe('NS response edge cases', () => {
+  it.each([null, {}])('handles an absent top-level payload: %j', async (data) => {
+    mockFetch([
+      { match: '/v3/trips', value: jsonResponse(data) },
+      { match: '/v2/journey', value: jsonResponse(data) },
+      { match: '/v2/stations', value: jsonResponse(data) },
+      { match: '/v2/departures', value: jsonResponse(data) },
+      { match: '/v3/disruptions', value: jsonResponse(data) },
+    ])
+    expect(await fetchTrips('A', 'B')).toEqual([])
+    expect(await fetchJourney('1')).toEqual([])
+    expect(await fetchStations()).toEqual([])
+    expect(await fetchBoard('A')).toEqual({ departures: [], disruptions: [] })
+  })
+
+  it('handles empty, missing, and non-array stop collections', async () => {
+    mockFetch([{ match: '/v3/trips', value: jsonResponse({ trips: [{}, { legs: [{}] }, { legs: [{ stops: [] }] }] }) }])
+    const trips = await fetchTrips('A', 'B')
+    expect(trips[0]).toEqual({ departure: '', arrival: '', durationMin: 0, transfers: 0, status: 'NORMAL', cancelled: false, cancellationReason: '', crowd: 'UNKNOWN', legs: [] })
+    expect(trips[1].legs[0]).toMatchObject({ service: '', category: '', displayName: '', trainNumber: '', origin: '', destination: '', departure: '', arrival: '', originTrack: '', destinationTrack: '', durationMin: 0, intermediateStops: 0, stops: [], walkToNextMin: null })
+    expect(trips[2].legs[0].intermediateStops).toBe(0)
+    mockFetch([{ match: '/v2/journey', value: jsonResponse({ payload: { stops: {} } }) }])
+    expect(await fetchJourney('1', { lang: 'nl' })).toEqual([])
+    expect(lastFetchUrl()).toContain('lang=nl')
+  })
+
+  it('uses actual-only times, planned duration, train numbers, and arrival tracks', async () => {
+    const time = '2026-06-29T10:00:00Z'
+    mockFetch([{ match: '/v3/trips', value: jsonResponse({ trips: [{ plannedDurationInMinutes: 20, legs: [
+      { product: { displayName: 'Sprinter', number: 123 }, actualDurationInMinutes: 21, transferTimeToNextLeg: 4, origin: { plannedTrack: '1', actualDateTime: time }, destination: { actualTrack: '2', actualDateTime: time }, stops: [{ actualArrivalDateTime: time, actualDepartureDateTime: time, actualArrivalTrack: '3', cancelled: true }] },
+      { name: ' IC', plannedDurationInMinutes: 20 },
+    ] }] }) }])
+    const trip = (await fetchTrips('A', 'B'))[0]
+    expect(trip.durationMin).toBe(20)
+    expect(trip.legs[0]).toMatchObject({ service: 'Sprinter', trainNumber: '123', departure: time, arrival: time, originTrack: '1', destinationTrack: '2', durationMin: 21, walkToNextMin: 4 })
+    expect(trip.legs[0].stops[0]).toMatchObject({ arrival: time, departure: time, track: '3', cancelled: true })
+    expect(trip.legs[1]).toMatchObject({ category: '', durationMin: 20 })
+  })
+
+  it.each([
+    ['plain reason', 'plain reason'],
+    [{ message: 'Message reason' }, 'Message reason'],
+    [{ title: 'Title reason' }, 'Title reason'],
+    [null, ''],
+    [{}, ''],
+    ['   ', ''],
+  ])('reads cancellation message shape %j', async (message, expected) => {
+    mockFetch([{ match: '/v3/trips', value: jsonResponse({ trips: [{ status: 'CANCELLED', messages: [message] }] }) }])
+    expect((await fetchTrips('A', 'B'))[0].cancellationReason).toBe(expected)
+  })
+
+  it.each([
+    [{ product: { type: 'WALK' } }, 'WALK'],
+    [{ product: { displayName: 'Walk to platform' } }, 'WALK'],
+    [{ name: 'Lopen' }, 'WALK'],
+    [{ product: { type: 'SUBWAY' } }, 'METRO'],
+    [{ product: { type: 'FERRY' } }, 'FERRY'],
+    [{ product: { displayName: 'Boot' } }, 'FERRY'],
+    [{ product: { displayName: 'Veer' } }, 'FERRY'],
+    [{ travelType: 'PUBLIC_TRANSIT' }, 'TRAIN'],
+  ])('recognizes travel mode for %j', async (leg, expected) => {
+    mockFetch([{ match: '/v3/trips', value: jsonResponse({ trips: [{ legs: [leg] }] }) }])
+    expect((await fetchTrips('A', 'B'))[0].legs[0].mode).toBe(expected)
+  })
+
+  it('encodes station codes and ignores arrival search without a date', async () => {
+    mockFetch([{ match: '/v3/trips', value: jsonResponse({ trips: [] }) }])
+    await fetchTrips('A & B', 'C/D', { searchForArrival: true })
+    expect(lastFetchUrl()).toContain('fromStation=A%20%26%20B&toStation=C%2FD')
+    expect(lastFetchUrl()).not.toContain('searchForArrival')
+    await fetchTrips('A', 'B', { dateTime: '2026-06-29T10:00:00Z' })
+    expect(lastFetchUrl()).toContain('dateTime=')
+    expect(lastFetchUrl()).not.toContain('searchForArrival')
+  })
+
+  it('limits error text to 80 characters', async () => {
+    mockFetch([{ match: '/v3/trips', value: jsonResponse('x'.repeat(100), { ok: false, status: 500 }) }])
+    await expect(fetchTrips('A', 'B')).rejects.toThrow('NS 500: ' + 'x'.repeat(80))
+  })
+
+  it.each([false, true])('reports status even when error body is unreadable: %s', async (rejectBody) => {
+    const response = jsonResponse('', { ok: false, status: 503 })
+    if (rejectBody) response.text = async () => { throw new Error('unreadable') }
+    mockFetch([{ match: '/v3/trips', value: response }])
+    await expect(fetchTrips('A', 'B')).rejects.toThrow('NS 503')
+  })
+
+  it('uses actual-only journey times and arrival tracks and handles missing entries', async () => {
+    const time = '2026-06-29T10:00:00Z'
+    mockFetch([{ match: '/v2/journey', value: jsonResponse({ payload: { stops: [
+      { arrivals: [{ actualTime: time, actualTrack: '2', cancelled: true }], departures: [{ actualTime: time }] },
+      { stop: {}, arrivals: [], departures: [{ cancelled: true }] },
+      {},
+    ] } }) }])
+    const stops = await fetchJourney('IC & 1')
+    expect(stops[0]).toMatchObject({ name: '', arrival: time, departure: time, track: '2', cancelled: true })
+    expect(stops[1]).toMatchObject({ track: '', cancelled: true })
+    expect(stops[2]).toEqual({ name: '', arrival: '', departure: '', track: '', arrivalDelayMin: 0, departureDelayMin: 0, cancelled: false })
+    expect(lastFetchUrl()).toContain('train=IC%20%26%201')
+  })
+
+  it('handles early departures, missing tracks, status cancellations, and wrapped disruptions', async () => {
+    mockFetch([
+      { match: '/v2/departures', value: jsonResponse({ payload: { departures: [
+        { direction: 'A', plannedDateTime: '2026-06-29T10:00:00Z', actualDateTime: '2026-06-29T09:59:00Z', departureStatus: 'CANCELLED' },
+        { direction: 'B', actualDateTime: '2026-06-29T10:01:00Z', actualTrack: '2' },
+        { direction: 'C', plannedDateTime: '2026-06-29T10:00:00Z', actualTrack: '3', plannedTrack: '3' },
+      ] } }) },
+      { match: '/v3/disruptions', value: jsonResponse({ payload: [{}] }) },
+    ])
+    const board = await fetchBoard('A/B')
+    expect(board.departures[0]).toMatchObject({ delayMin: 0, track: '?', cancelled: true })
+    expect(board.departures[1]).toMatchObject({ time: '2026-06-29T10:01:00Z', delayMin: 0, track: '2', trackChanged: false })
+    expect(board.departures[2].trackChanged).toBe(false)
+    expect(board.disruptions).toEqual([{ type: 'DISRUPTION', title: 'Storing' }])
+  })
+})
