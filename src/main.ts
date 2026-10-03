@@ -1611,6 +1611,7 @@ function updatePhoneTrips(trips: Trip[], route: SavedRoute) {
 
 function showDetail(trip: Trip, route: SavedRoute | null = phoneRoute, preserveStops: boolean = false) {
   const scrollTop = detailView.scrollTop
+  const keepScroll = preserveStops || !detailView.hidden
   phoneDetailTrip = trip
   if (!preserveStops) {
     stopsView.hidden = true
@@ -1647,7 +1648,7 @@ function showDetail(trip: Trip, route: SavedRoute | null = phoneRoute, preserveS
       }
     })
   })
-  detailView.scrollTop = preserveStops ? scrollTop : 0
+  detailView.scrollTop = keepScroll ? scrollTop : 0
   detailView.hidden = false
 }
 

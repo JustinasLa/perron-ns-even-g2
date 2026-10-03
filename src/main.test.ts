@@ -1310,6 +1310,20 @@ describe('SDK rendering failures', () => {
     expect(console.error).toHaveBeenCalledWith(expect.objectContaining({ message: 'clock unavailable' }))
   })
 
+  it('recovers the final glasses list after a failed result draw', async () => {
+    await boot({ routes: [route] })
+    const error = new Error('result draw unavailable')
+    mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(true).mockRejectedValueOnce(error)
+    gesture(OsEventTypeList.CLICK_EVENT, true)
+    await flush()
+    expect(console.error).toHaveBeenCalledWith(error)
+    expect(mocks.trips).toHaveBeenCalledOnce()
+    expect(api.state.detailStatus).toBe('ready')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(lens()).toContain('Utrecht Centraal > Amsterdam Centraal')
+    expect(lens()).not.toContain('Loading times...')
+  })
+
   it('reports refresh rendering failure', async () => {
     await boot({ routes: [route] })
     await api.openTripList()
@@ -2273,6 +2287,21 @@ describe('journey lifecycle and independent views', () => {
     expect(api.state.detailStatus).toBe('ready')
     expect(element('#results').innerHTML).toBe('')
     expect(lens()).toContain('Platform: 19')
+  })
+
+  it('keeps the phone detail scroll position during a valid refresh', async () => {
+    await boot({ routes: [route] })
+    click('#saved .chip')
+    await flush()
+    click('#results .trip-card')
+    element('#detail').scrollTop = 180
+    const updated = trip({ legs: [leg({ originTrack: '19', departureDelayMin: 8 })] })
+    mocks.trips.mockResolvedValueOnce([updated])
+    await api.refreshOpenTrips()
+    expect(element('#detail').hidden).toBe(false)
+    expect(element('#stops').hidden).toBe(true)
+    expect(element('#detail').scrollTop).toBe(180)
+    expect(element('#detail').textContent).toContain('19')
   })
 
   it('preserves open full stops, focus, and detail scroll when the same itinerary refreshes', async () => {
