@@ -449,11 +449,33 @@ function delayTag(min: number): string {
   return ''
 }
 
+function effectiveLegs(legs: TripLeg[]): TripLeg[] {
+  const result: TripLeg[] = []
+  for (const leg of legs) {
+    let effective = leg
+    const prev = result[result.length - 1]
+    if (leg.mode === 'WALK' && prev) {
+      const shift = Math.round((new Date(prev.arrival).getTime() - new Date(leg.departure).getTime()) / 60000)
+        + prev.arrivalDelayMin - leg.departureDelayMin
+      if (shift > 0) {
+        effective = {
+          ...leg,
+          departureDelayMin: leg.departureDelayMin + shift,
+          arrivalDelayMin: leg.arrivalDelayMin + shift,
+        }
+      }
+    }
+    result.push(effective)
+  }
+  return result
+}
+
 function tripDelays(trip: Trip): { departure: number; arrival: number } {
   let departure = 0
   let arrival = 0
-  const first = trip.legs[0]
-  const last = trip.legs[trip.legs.length - 1]
+  const legs = effectiveLegs(trip.legs)
+  const first = legs[0]
+  const last = legs[legs.length - 1]
   if (first) {
     departure = first.departureDelayMin
   }
@@ -532,6 +554,7 @@ function detailContent(): string {
   }
 
   const trip = detailTrips[tripIdx]
+  const legs = effectiveLegs(trip.legs)
   const eta = fmtTime(trip.arrival) + delayTag(tripDelays(trip).arrival)
   const lines: string[] = [route.fromName + ' > ' + route.toName + ' | ' + tr('etaLabel') + ' ' + eta, '']
   if (trip.cancelled) {
@@ -542,8 +565,8 @@ function detailContent(): string {
     }
     lines.push('')
   }
-  for (let i = 0; i < trip.legs.length; i++) {
-    const leg = trip.legs[i]
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]
     let originPlatform = ''
     if (leg.originTrack) {
       originPlatform = ' | ' + tr('platformLabel') + ' ' + leg.originTrack
@@ -559,8 +582,8 @@ function detailContent(): string {
     }
     lines.push('    ' + legServiceLabel(leg) + ' · ' + legText)
     lines.push(fmtTime(leg.arrival) + delayTag(leg.arrivalDelayMin) + ' ' + leg.destination + destPlatform)
-    if (i < trip.legs.length - 1) {
-      const next = trip.legs[i + 1]
+    if (i < legs.length - 1) {
+      const next = legs[i + 1]
       const gap = gapMinutes(leg, next)
       let label = tr('changeLabel')
       if (leg.mode === 'WALK' || next.mode === 'WALK') {
@@ -1256,7 +1279,7 @@ function legServiceLabel(leg: TripLeg): string {
     if (!label.includes(leg.trainNumber)) {
       label += ' ' + leg.trainNumber
     }
-  } else if (leg.service && label.toUpperCase() === modeLabel(leg.mode).toUpperCase()) {
+  } else if (leg.service && (/\d/.test(leg.service) || label.toUpperCase() === modeLabel(leg.mode).toUpperCase())) {
     label = leg.service
   }
   return label
@@ -1616,11 +1639,12 @@ function nameForCode(code: string): string {
 
 function buildSummary(trip: Trip): string {
   let badges = ''
-  for (let i = 0; i < trip.legs.length; i++) {
-    const l = trip.legs[i]
+  const legs = effectiveLegs(trip.legs)
+  for (let i = 0; i < legs.length; i++) {
+    const l = legs[i]
     badges += serviceBadge(l)
-    if (i < trip.legs.length - 1) {
-      const gap = gapMinutes(l, trip.legs[i + 1])
+    if (i < legs.length - 1) {
+      const gap = gapMinutes(l, legs[i + 1])
       if (gap > 0) {
         badges += '<span class="gap-badge">' + gap + '<span>' + tr('minShort') + '</span></span>'
       }
@@ -1665,11 +1689,12 @@ function buildDetail(trip: Trip): string {
     to = trip.legs[trip.legs.length - 1].destination
   }
   let route = ''
-  for (let i = 0; i < trip.legs.length; i++) {
-    const leg = trip.legs[i]
+  const legs = effectiveLegs(trip.legs)
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i]
     route += legCard(leg, i)
-    if (i < trip.legs.length - 1) {
-      route += transferBlock(leg, trip.legs[i + 1])
+    if (i < legs.length - 1) {
+      route += transferBlock(leg, legs[i + 1])
     }
   }
   return `
@@ -1806,7 +1831,7 @@ function stopRow(stop: LegStop, i: number, total: number, boardIdx: number, exit
   }
 
   let rowClass = 'stop'
-  if (legCancelled || stop.cancelled) {
+  if ((legCancelled && inSegment) || stop.cancelled) {
     rowClass += ' cancelled'
     marker = '<span class="stop-marker stop-cancelled">' + tr('cancelled') + '</span>'
   }

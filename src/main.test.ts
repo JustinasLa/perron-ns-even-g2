@@ -1293,6 +1293,75 @@ describe('journey presentation and stops', () => {
     expect(api.detailContent()).toContain('Wait (5 min)')
   })
 
+  it('carries an incoming delay through walking times and later connection gaps', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 8, operator: '' })
+    const walk = leg({ mode: 'WALK', departure: first.arrival, departureDelayMin: 0, arrival: '2026-10-02T10:03:00Z', arrivalDelayMin: 0, durationMin: 3, operator: '', trainNumber: '', stops: [] })
+    const next = leg({ departure: '2026-10-02T10:10:00Z', departureDelayMin: 0, operator: '' })
+    const itinerary = trip({ legs: [first, walk, next] })
+    api.state.detailRoute = route
+    api.state.detailStatus = 'ready'
+    api.state.detailTrips = [itinerary]
+    api.showDetail(itinerary)
+    const walkingTimes = document.querySelectorAll('#detail .leg')[1].querySelectorAll('.leg-time')
+    expect(Array.from(walkingTimes, (el) => el.textContent)).toEqual([api.fmtTime(walk.departure) + ' +8', api.fmtTime(walk.arrival) + ' +8'])
+    expect(document.querySelector('#detail .gap-badge')).toBeNull()
+    expect(document.querySelector('#detail .xfer-row')).toBeNull()
+    expect(api.detailContent()).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(api.detailContent()).not.toContain('Wait')
+    expect(walk.departureDelayMin).toBe(0)
+    expect(walk.arrivalDelayMin).toBe(0)
+    const feasible = trip({ legs: [{ ...first, arrivalDelayMin: 5 }, walk, next] })
+    api.state.detailTrips = [feasible]
+    api.showDetail(feasible)
+    expect(element('#detail .gap-badge').textContent).toBe('2min')
+    expect(element('#detail .xfer-left').textContent).toBe('2 min')
+    expect(element('#detail .xfer-text').textContent).toBe('Wait')
+    expect(api.detailContent()).toContain('Wait (2 min)')
+    const endingWalk = trip({ legs: [first, walk], arrival: walk.arrival })
+    api.state.detailTrips = [endingWalk]
+    api.renderTrips([endingWalk])
+    api.showDetail(endingWalk)
+    expect(api.tripDelays(endingWalk).arrival).toBe(8)
+    expect(element('#results .trip-time').textContent).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(element('#detail .summary .trip-time').textContent).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(api.listContent()).toContain(api.fmtTime(walk.arrival) + ' +8')
+    expect(api.detailContent()).toContain('ETA: ' + api.fmtTime(walk.arrival) + ' +8')
+  })
+
+  it('propagates walking delays across midnight and consecutive legs without accumulating them twice', async () => {
+    await boot()
+    const first = leg({ arrival: '2026-10-02T23:59:00Z', arrivalDelayMin: 8 })
+    const walk = leg({ mode: 'WALK', departure: first.arrival, departureDelayMin: 2, arrival: '2026-10-03T00:02:00Z', arrivalDelayMin: 2, durationMin: 3 })
+    const secondWalk = { ...walk, departure: walk.arrival, departureDelayMin: 0, arrival: '2026-10-03T00:06:00Z', arrivalDelayMin: 0, durationMin: 4 }
+    const next = leg({ departure: '2026-10-03T00:17:00Z', departureDelayMin: 0 })
+    const effective = api.effectiveLegs([first, walk, secondWalk, next])
+    expect(effective[0]).toBe(first)
+    expect(effective[3]).toBe(next)
+    expect(effective.slice(1, 3).map((item: TripLeg) => [item.departureDelayMin, item.arrivalDelayMin])).toEqual([[8, 8], [8, 8]])
+    expect(api.gapMinutes(effective[2], effective[3])).toBe(3)
+    expect(api.effectiveLegs(effective)).toEqual(effective)
+    expect(api.effectiveLegs([{ ...first, arrival: '' }, walk])[1]).toBe(walk)
+    const alreadyDelayed = { ...walk, departureDelayMin: 9, arrivalDelayMin: 9 }
+    expect(api.effectiveLegs([first, alreadyDelayed])[1]).toBe(alreadyDelayed)
+  })
+
+  it('retains numbered API service names when product numbers are absent', async () => {
+    await boot()
+    for (const service of [
+      leg({ mode: 'BUS', displayName: 'Lijnbus', service: 'Bus 320', trainNumber: '' }),
+      leg({ displayName: 'Intercity', service: 'IC 1429', trainNumber: '' }),
+    ]) {
+      const itinerary = trip({ legs: [service] })
+      api.state.detailRoute = route
+      api.state.detailTrips = [itinerary]
+      api.showDetail(itinerary)
+      expect(element('.leg-service-name').textContent).toBe(service.service)
+      expect(api.buildStops(service, service.stops, 0, 2)).toContain(service.service)
+      expect(api.detailContent()).toContain(service.service + ' · Trip:')
+    }
+  })
+
   it('labels unknown walking time honestly and omits empty transfer rows', async () => {
     await boot()
     const first = leg({ arrival: '2026-10-02T10:00:00Z', arrivalDelayMin: 0, walkToNextMin: null })
@@ -1316,7 +1385,7 @@ describe('journey presentation and stops', () => {
     api.state.detailTrips = [itinerary]
     api.showDetail(itinerary)
     expect(element('.leg.cancelled .leg-service-meta').textContent).toBe('Cancelled')
-    expect(api.detailContent()).toContain('Intercity · CANCELLED')
+    expect(api.detailContent()).toContain('IC 123 · CANCELLED')
     api.showStops(cancelledLeg)
     expect(document.querySelectorAll('#stops .stop.cancelled')).toHaveLength(3)
     expect(element('#stops').textContent).not.toContain('Board here')
@@ -1330,6 +1399,22 @@ describe('journey presentation and stops', () => {
       expect(html).not.toContain('Get off here')
     }
     expect(api.stopRow(stop('Running stop'), 1, 3, 0, 2)).not.toContain('Cancelled')
+  })
+
+  it('limits leg cancellation to the travelled segment of a fetched full route', async () => {
+    await boot()
+    const cancelledLeg = leg({ cancelled: true, origin: 'B', destination: 'D', stops: [stop('B'), stop('C'), stop('D')] })
+    const full = ['A', 'B', 'C', 'D', 'E'].map((name) => stop(name))
+    mocks.journey.mockResolvedValueOnce(full)
+    api.showStops(cancelledLeg)
+    await flush()
+    expect(Array.from(document.querySelectorAll('#stops .stop.cancelled .stop-name'), (el) => el.textContent)).toEqual(['B', 'C', 'D'])
+    expect(element('#stops').textContent).not.toContain('Board here')
+    expect(element('#stops').textContent).not.toContain('Get off here')
+    mocks.journey.mockResolvedValueOnce([{ ...full[0], cancelled: true }, ...full.slice(1)])
+    api.showStops(cancelledLeg)
+    await flush()
+    expect(Array.from(document.querySelectorAll('#stops .stop.cancelled .stop-name'), (el) => el.textContent)).toEqual(['A', 'B', 'C', 'D'])
   })
 
   it('localizes walking, durations, exit sides, transfer time, and cancellations', async () => {
