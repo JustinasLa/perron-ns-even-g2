@@ -1365,6 +1365,17 @@ function gapMinutes(prev: TripLeg, next: TripLeg): number {
   return g
 }
 
+function makeKeyboardButton(el: HTMLElement) {
+  el.setAttribute('role', 'button')
+  el.tabIndex = 0
+  el.addEventListener('keydown', function (e) {
+    if (e.target === el && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault()
+      el.click()
+    }
+  })
+}
+
 function renderTrips(trips: Trip[], route: SavedRoute | null = detailRoute) {
   if (!results) {
     return
@@ -1380,6 +1391,7 @@ function renderTrips(trips: Trip[], route: SavedRoute | null = detailRoute) {
     const services = serviceBadges(trip.legs)
 
     const card = document.createElement('div')
+    makeKeyboardButton(card)
     card.dataset.idx = String(idx)
     if (trip.cancelled) {
       card.className = 'trip-card cancelled'
@@ -1604,6 +1616,92 @@ function transferBlock(prev: TripLeg, next: TripLeg): string {
     </div>`
 }
 
+const PHONE_FOCUSABLE = 'button:not(:disabled), input:not(:disabled), [tabindex="0"]'
+const phoneOverlayFocus = new Map<HTMLElement, {
+  opener: HTMLElement
+  fallback: () => HTMLElement | null
+  background: Element[]
+}>()
+
+function phoneFocusIndex(overlay: HTMLElement): number {
+  return Array.from(overlay.querySelectorAll<HTMLElement>(PHONE_FOCUSABLE)).indexOf(document.activeElement as HTMLElement)
+}
+
+function focusPhoneOverlay(overlay: HTMLElement, index = 0) {
+  const controls = overlay.querySelectorAll<HTMLElement>(PHONE_FOCUSABLE)
+  const target = controls[index] || controls[0] || overlay
+  target.focus()
+}
+
+function openPhoneOverlay(overlay: HTMLElement, fallback: () => HTMLElement | null, focusIndex = -1, opener: HTMLElement = document.activeElement as HTMLElement) {
+  const entering = overlay.hidden
+  if (!phoneOverlayFocus.has(overlay)) {
+    const background: Element[] = []
+    for (const child of document.body.children) {
+      if (child !== overlay && !child.hasAttribute('hidden') && !child.hasAttribute('inert')) {
+        child.setAttribute('inert', '')
+        background.push(child)
+      }
+    }
+    phoneOverlayFocus.set(overlay, { opener, fallback, background })
+  }
+  overlay.hidden = false
+  if (entering || focusIndex >= 0) {
+    focusPhoneOverlay(overlay, focusIndex)
+  }
+}
+
+function closePhoneOverlay(overlay: HTMLElement) {
+  overlay.hidden = true
+  const state = phoneOverlayFocus.get(overlay)
+  if (!state) {
+    return
+  }
+  phoneOverlayFocus.delete(overlay)
+  for (const child of state.background) {
+    child.removeAttribute('inert')
+  }
+  let target: HTMLElement | null = state.opener
+  if (!target.isConnected || target === document.body || target.closest('[hidden], [inert]')) {
+    target = state.fallback()
+  }
+  if (target) {
+    target.focus()
+  }
+}
+
+function bindPhoneOverlay(overlay: HTMLElement, labelId: string, close: () => void) {
+  overlay.tabIndex = -1
+  overlay.setAttribute('role', 'dialog')
+  overlay.setAttribute('aria-modal', 'true')
+  overlay.setAttribute('aria-labelledby', labelId)
+  overlay.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      close()
+      return
+    }
+    if (e.key !== 'Tab') {
+      return
+    }
+    const controls = overlay.querySelectorAll<HTMLElement>(PHONE_FOCUSABLE)
+    if (controls.length === 0) {
+      e.preventDefault()
+      overlay.focus()
+      return
+    }
+    const first = controls[0]
+    const last = controls[controls.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  })
+}
+
 const detailView = document.createElement('div')
 detailView.id = 'detail'
 detailView.hidden = true
@@ -1615,6 +1713,10 @@ stopsView.id = 'stops'
 stopsView.hidden = true
 stopsView.className = 'overlay overlay--top'
 document.body.appendChild(stopsView)
+bindPhoneOverlay(detailView, 'detail-title', closeDetail)
+bindPhoneOverlay(stopsView, 'stops-title', function () {
+  closePhoneOverlay(stopsView)
+})
 
 function starSvg(filled: boolean, size: number = 20): string {
   if (filled) {
@@ -1696,7 +1798,7 @@ function buildDetail(trip: Trip): string {
     <header class="detail-header">
       <button id="detail-back" type="button" aria-label="${tr('ariaBack')}" class="icon-btn">${BACK_ICON}</button>
       <div class="detail-title">
-        <div class="detail-title-main">${escapeHtml(from)} - ${escapeHtml(to)}</div>
+        <div id="detail-title" class="detail-title-main">${escapeHtml(from)} - ${escapeHtml(to)}</div>
         <div class="detail-title-sub">${fmtDateHeader(trip.departure)}</div>
       </div>
       <span class="header-spacer"></span>
@@ -1716,34 +1818,49 @@ function updatePhoneTrips(trips: Trip[], route: SavedRoute) {
     if (index >= 0) {
       showDetail(trips[index], route, !stopsView.hidden)
     } else {
-      detailView.hidden = true
-      stopsView.hidden = true
+      closePhoneOverlay(stopsView)
+      closePhoneOverlay(detailView)
+      activePhoneDetailClose = null
       phoneDetailTrip = null
     }
   }
 }
 
-function showDetail(trip: Trip, route: SavedRoute | null = phoneRoute, preserveStops: boolean = false) {
-  const scrollTop = detailView.scrollTop
-  const keepScroll = preserveStops || !detailView.hidden
-  phoneDetailTrip = trip
-  if (!preserveStops) {
-    stopsView.hidden = true
+let activePhoneDetailClose: (() => void) | null = null
+
+function closeDetail() {
+  if (activePhoneDetailClose) {
+    const close = activePhoneDetailClose
+    activePhoneDetailClose = null
+    close()
   }
+}
+
+function showDetail(trip: Trip, route: SavedRoute | null = phoneRoute, preserveStops: boolean = false) {
+  phoneDetailTrip = trip
+  activePhoneDetailClose = function () {
+    closePhoneOverlay(stopsView)
+    closePhoneOverlay(detailView)
+    phoneDetailTrip = null
+    const lensTrip = selectedLensTrip()
+    if (view === 'detail' && route && detailRoute && sameRoute(route, detailRoute) && lensTrip && tripKey(lensTrip) === tripKey(trip)) {
+      view = 'list'
+      renderLens().catch(function (err) {
+        console.error(err)
+      })
+    }
+  }
+  if (!preserveStops) {
+    closePhoneOverlay(stopsView)
+  }
+  let focusIndex = phoneFocusIndex(detailView)
+  const focusedLeg = focusIndex >= 0 ? (document.activeElement as HTMLElement).dataset.leg : undefined
+  const keepScroll = preserveStops || !detailView.hidden
+  const scrollTop = detailView.scrollTop
   detailView.innerHTML = buildDetail(trip)
   const backBtn = detailView.querySelector<HTMLButtonElement>('#detail-back')
   if (backBtn) {
-    backBtn.addEventListener('click', function () {
-      detailView.hidden = true
-      phoneDetailTrip = null
-      const lensTrip = selectedLensTrip()
-      if (view === 'detail' && route && detailRoute && sameRoute(route, detailRoute) && lensTrip && tripKey(lensTrip) === tripKey(trip)) {
-        view = 'list'
-        renderLens().catch(function (err) {
-          console.error(err)
-        })
-      }
-    })
+    backBtn.addEventListener('click', closeDetail)
   }
   const taps = detailView.querySelectorAll<HTMLDivElement>('.leg-service--tap')
   taps.forEach(function (el) {
@@ -1753,17 +1870,24 @@ function showDetail(trip: Trip, route: SavedRoute | null = phoneRoute, preserveS
       return
     }
     el.addEventListener('click', function () {
-      showStops(leg)
+      showStops(leg, el)
     })
     el.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault()
-        showStops(leg)
+        showStops(leg, el)
       }
     })
   })
+  if (focusedLeg !== undefined) {
+    focusIndex = Math.max(0, Array.from(detailView.querySelectorAll<HTMLElement>(PHONE_FOCUSABLE)).findIndex(function (control) {
+      return control.dataset.leg === focusedLeg
+    }))
+  }
   detailView.scrollTop = keepScroll ? scrollTop : 0
-  detailView.hidden = false
+  openPhoneOverlay(detailView, function () {
+    return document.querySelector<HTMLElement>('#results .trip-card.selected') || fromEl
+  }, focusIndex)
 }
 
 const STOP_START_ICON = icon('Navigate Feature Icon/Location', { size: 18 })
@@ -1865,7 +1989,7 @@ function buildStops(leg: TripLeg, stops: LegStop[], boardIdx: number, exitIdx: n
     <header class="detail-header">
       <button id="stops-back" type="button" aria-label="${tr('ariaBack')}" class="icon-btn">${BACK_ICON}</button>
       <div class="detail-title">
-        <div class="detail-title-main">${escapeHtml(legServiceLabel(leg))}</div>
+        <div id="stops-title" class="detail-title-main">${escapeHtml(legServiceLabel(leg))}</div>
         <div class="detail-title-sub">${tr('connectorTo')} ${escapeHtml(leg.direction)}</div>
         ${cancellation}
       </div>
@@ -1880,7 +2004,7 @@ function bindStopsBack() {
   const backBtn = stopsView.querySelector<HTMLButtonElement>('#stops-back')
   if (backBtn) {
     backBtn.addEventListener('click', function () {
-      stopsView.hidden = true
+      closePhoneOverlay(stopsView)
     })
   }
 }
@@ -1896,16 +2020,20 @@ function indexByName(stops: LegStop[], name: string): number {
 
 let stopsToken = 0
 
-function showStops(leg: TripLeg) {
+function showStops(leg: TripLeg, opener: HTMLElement = document.activeElement as HTMLElement) {
   if (!leg || leg.stops.length === 0) {
     return
   }
   stopsToken++
   const token = stopsToken
+  const focusIndex = phoneFocusIndex(stopsView)
+  const legIdx = opener.dataset.leg
   stopsView.innerHTML = buildStops(leg, leg.stops, 0, leg.stops.length - 1)
   bindStopsBack()
   stopsView.scrollTop = 0
-  stopsView.hidden = false
+  openPhoneOverlay(stopsView, function () {
+    return detailView.querySelector<HTMLElement>('.leg-service--tap[data-leg="' + legIdx + '"]') || detailView.querySelector<HTMLElement>('#detail-back')
+  }, focusIndex, opener)
 
   if (!leg.trainNumber) {
     return
@@ -1923,8 +2051,12 @@ function showStops(leg: TripLeg) {
       if (boardIdx < 0 || exitIdx < 0 || boardIdx > exitIdx) {
         return
       }
+      const focusIndex = phoneFocusIndex(stopsView)
       stopsView.innerHTML = buildStops(leg, full, boardIdx, exitIdx)
       bindStopsBack()
+      if (focusIndex >= 0) {
+        focusPhoneOverlay(stopsView, focusIndex)
+      }
       if (boardIdx > 0) {
         const boardEl = stopsView.querySelector<HTMLDivElement>('#stop-board')
         if (boardEl) {
@@ -2091,6 +2223,8 @@ document.body.appendChild(timeModal)
 let pickerMode: TimeMode = 'departure'
 let pickerDate: Date = startOfDay(new Date())
 let pickerIsNow = true
+let timeReturnFocus: HTMLElement | null = null
+let timeBackground: Element[] = []
 
 const hourEl = timeModal.querySelector<HTMLDivElement>('#wheel-hour')!
 const minEl = timeModal.querySelector<HTMLDivElement>('#wheel-min')!
@@ -2115,6 +2249,10 @@ interface Wheel {
 
 function buildWheel(el: HTMLElement, count: number): Wheel {
   el.innerHTML = ''
+  el.setAttribute('role', 'spinbutton')
+  el.tabIndex = 0
+  el.setAttribute('aria-valuemin', '0')
+  el.setAttribute('aria-valuemax', String(count - 1))
   const top = document.createElement('div')
   top.className = 'wheel-spacer'
   el.appendChild(top)
@@ -2141,8 +2279,11 @@ function buildWheel(el: HTMLElement, count: number): Wheel {
     }
     return i
   }
+  let selectedIdx = 0
   function markCenter() {
     const idx = clampIdx(Math.round(el.scrollTop / WHEEL_ITEM_H))
+    selectedIdx = idx
+    el.setAttribute('aria-valuenow', String(idx))
     for (let i = 0; i < count; i++) {
       const c = el.children[i + 1] as HTMLElement
       if (i === idx) {
@@ -2152,10 +2293,33 @@ function buildWheel(el: HTMLElement, count: number): Wheel {
       }
     }
   }
-  el.addEventListener('scroll', markCenter)
+  el.addEventListener('scroll', function () {
+    if (clampIdx(Math.round(el.scrollTop / WHEEL_ITEM_H)) !== selectedIdx) {
+      clearNow()
+    }
+    markCenter()
+  })
   el.addEventListener('pointerdown', clearNow)
   el.addEventListener('wheel', clearNow)
   el.addEventListener('touchstart', clearNow, { passive: true })
+  el.addEventListener('keydown', function (e) {
+    let next = clampIdx(Math.round(el.scrollTop / WHEEL_ITEM_H))
+    if (e.key === 'ArrowUp') {
+      next++
+    } else if (e.key === 'ArrowDown') {
+      next--
+    } else if (e.key === 'Home') {
+      next = 0
+    } else if (e.key === 'End') {
+      next = count - 1
+    } else {
+      return
+    }
+    e.preventDefault()
+    clearNow()
+    el.scrollTop = clampIdx(next) * WHEEL_ITEM_H
+    markCenter()
+  })
 
   return {
     set: function (i: number) {
@@ -2172,6 +2336,8 @@ const hourWheel = buildWheel(hourEl, 24)
 const minWheel = buildWheel(minEl, 60)
 
 function updateTabs() {
+  tabDep.setAttribute('aria-pressed', pickerMode === 'departure' ? 'true' : 'false')
+  tabArr.setAttribute('aria-pressed', pickerMode === 'arrival' ? 'true' : 'false')
   if (pickerMode === 'departure') {
     tabDep.classList.add('sel')
     tabArr.classList.remove('sel')
@@ -2182,6 +2348,7 @@ function updateTabs() {
 }
 
 function updateNowState() {
+  nowBtn.setAttribute('aria-pressed', pickerIsNow ? 'true' : 'false')
   if (pickerIsNow) {
     nowBtn.classList.add('sel')
   } else {
@@ -2195,6 +2362,16 @@ function updateDateRow() {
 }
 
 function openTimeModal() {
+  closeLangMenu()
+  if (timeModal.hidden) {
+    timeReturnFocus = document.activeElement === document.body ? depBox : document.activeElement as HTMLElement
+    for (const child of document.body.children) {
+      if (child !== timeModal && !child.hasAttribute('inert')) {
+        child.setAttribute('inert', '')
+        timeBackground.push(child)
+      }
+    }
+  }
   pickerMode = planTimeMode
   let base = new Date()
   if (planDateTime) {
@@ -2208,10 +2385,24 @@ function openTimeModal() {
   timeModal.hidden = false
   hourWheel.set(base.getHours())
   minWheel.set(base.getMinutes())
+  if (pickerMode === 'departure') {
+    tabDep.focus()
+  } else {
+    tabArr.focus()
+  }
 }
 
 function closeTimeModal() {
   timeModal.hidden = true
+  for (const child of timeBackground) {
+    child.removeAttribute('inert')
+  }
+  timeBackground = []
+  if (timeReturnFocus && timeReturnFocus.isConnected) {
+    timeReturnFocus.focus()
+  } else if (depBox) {
+    depBox.focus()
+  }
 }
 
 function setNow() {
@@ -2277,6 +2468,36 @@ timeModal.addEventListener('click', function (e) {
     closeTimeModal()
   }
 })
+timeModal.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    closeTimeModal()
+    return
+  }
+  if (e.key !== 'Tab') {
+    return
+  }
+  const controls = timeModal.querySelectorAll<HTMLElement>('button:not(:disabled), [tabindex="0"]')
+  const first = controls[0]
+  const last = controls[controls.length - 1]
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
+})
+document.addEventListener('focusin', function (e) {
+  if (!timeModal.hidden && !timeModal.contains(e.target as Node)) {
+    tabDep.focus()
+  } else if (timeModal.hidden && errorModal.hidden) {
+    const overlay = Array.from(phoneOverlayFocus.keys()).at(-1)
+    if (overlay && !overlay.contains(e.target as Node)) {
+      focusPhoneOverlay(overlay)
+    }
+  }
+})
 
 const depBox = document.getElementById('dep-box')
 if (depBox) {
@@ -2327,8 +2548,9 @@ async function planJourney(activeRoute?: SavedRoute, mirror: boolean = true) {
   if (!activeRoute) {
     phoneDetailTrip = null
   }
-  detailView.hidden = true
-  stopsView.hidden = true
+  closePhoneOverlay(stopsView)
+  closePhoneOverlay(detailView)
+  activePhoneDetailClose = null
   let lensId = lensRequestId
   if (mirror) {
     lensId = ++lensRequestId
@@ -2411,8 +2633,9 @@ function onFieldEdited() {
   phoneRequestId++
   phoneRoute = null
   phoneDetailTrip = null
-  detailView.hidden = true
-  stopsView.hidden = true
+  closePhoneOverlay(stopsView)
+  closePhoneOverlay(detailView)
+  activePhoneDetailClose = null
   setResults('')
   showPlanAgain(true)
   mirrorHomeToLens()
@@ -2458,7 +2681,7 @@ function renderSavedRoutes() {
     const r = savedRoutes[i]
     html +=
       '<div class="chip row-item row-divider" data-ri="' + i + '">' +
-      '<span class="row-name">' + escapeHtml(r.fromName) + ' ' + icon('Guide System/Go', { size: 15, cls: 'muted' }) + ' ' + escapeHtml(r.toName) + '</span>' +
+      '<button class="row-select" type="button"><span class="row-name">' + escapeHtml(r.fromName) + ' ' + icon('Guide System/Go', { size: 15, cls: 'muted' }) + ' ' + escapeHtml(r.toName) + '</span></button>' +
       '<button class="del menu-btn" data-ri="' + i + '" type="button" aria-label="' + tr('ariaRemoveRoute') + '">' + MENU_DOTS + '</button>' +
       '</div>'
   }
@@ -2506,8 +2729,10 @@ function renderFavorites() {
     const f = favorites[i]
     html +=
       '<div class="fav row-item row-divider" data-fi="' + i + '">' +
+      '<button class="row-select" type="button">' +
       '<span class="row-icon">' + iconSvg(f.icon, 22) + '</span>' +
       '<span class="row-name">' + escapeHtml(f.label) + '</span>' +
+      '</button>' +
       '<button class="favmenu menu-btn" data-fi="' + i + '" type="button" aria-label="' + tr('ariaEditFav') + '">' + MENU_DOTS + '</button>' +
       '</div>'
   }
@@ -2563,6 +2788,9 @@ favEditView.id = 'fav-edit'
 favEditView.hidden = true
 favEditView.className = 'overlay overlay--top'
 document.body.appendChild(favEditView)
+bindPhoneOverlay(favEditView, 'fav-edit-title', function () {
+  closePhoneOverlay(favEditView)
+})
 
 function showFavEdit(index: number) {
   const fav = favorites[index]
@@ -2582,10 +2810,11 @@ function showFavEdit(index: number) {
   }
 
   const safeLabel = escapeHtml(fav.label)
+  const focusIndex = phoneFocusIndex(favEditView)
   favEditView.innerHTML = `
     <header class="detail-header">
       <button id="fav-back" type="button" aria-label="${tr('ariaBack')}" class="icon-btn">${BACK_ICON}</button>
-      <div class="sheet-title">${tr('favLocationTitle')}</div>
+      <div id="fav-edit-title" class="sheet-title">${tr('favLocationTitle')}</div>
       <span class="header-spacer"></span>
     </header>
     <main class="sheet-main">
@@ -2609,7 +2838,7 @@ function showFavEdit(index: number) {
     </main>`
 
   function close() {
-    favEditView.hidden = true
+    closePhoneOverlay(favEditView)
   }
   const backBtn = favEditView.querySelector<HTMLButtonElement>('#fav-back')
   if (backBtn) {
@@ -2662,7 +2891,13 @@ function showFavEdit(index: number) {
     })
   }
   favEditView.scrollTop = 0
-  favEditView.hidden = false
+  openPhoneOverlay(favEditView, function () {
+    let targetIndex = favorites.indexOf(fav)
+    if (targetIndex < 0) {
+      targetIndex = Math.min(index, favorites.length - 1)
+    }
+    return document.querySelector<HTMLElement>('#fav-list .favmenu[data-fi="' + targetIndex + '"]') || favInput
+  }, focusIndex)
 }
 
 renderFavorites()
@@ -2727,17 +2962,20 @@ function applyLanguage() {
 const langToggle = document.getElementById('lang-toggle')
 const langMenu = document.getElementById('lang-menu') as HTMLUListElement | null
 
-function closeLangMenu() {
+function closeLangMenu(restoreFocus = false) {
   if (langMenu) {
     langMenu.hidden = true
   }
   if (langToggle) {
     langToggle.setAttribute('aria-expanded', 'false')
+    if (restoreFocus) {
+      langToggle.focus()
+    }
   }
 }
 
 function selectLang(code: Lang) {
-  closeLangMenu()
+  closeLangMenu(true)
   if (code === getLang()) {
     return
   }
@@ -2775,6 +3013,7 @@ function renderLangMenu() {
     li.setAttribute('role', 'option')
     li.className = 'option'
     const current = l.code === getLang()
+    li.tabIndex = current ? 0 : -1
     li.setAttribute('aria-selected', current ? 'true' : 'false')
     if (current) {
       li.classList.add('active')
@@ -2785,6 +3024,31 @@ function renderLangMenu() {
     li.appendChild(name)
     li.addEventListener('click', function () {
       selectLang(l.code)
+    })
+    li.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        selectLang(l.code)
+        return
+      }
+      const options = Array.from(langMenu.querySelectorAll<HTMLElement>('[role="option"]'))
+      let next = options.indexOf(li)
+      if (e.key === 'ArrowDown') {
+        next = (next + 1) % options.length
+      } else if (e.key === 'ArrowUp') {
+        next = (next + options.length - 1) % options.length
+      } else if (e.key === 'Home') {
+        next = 0
+      } else if (e.key === 'End') {
+        next = options.length - 1
+      } else {
+        return
+      }
+      e.preventDefault()
+      options.forEach(function (option, index) {
+        option.tabIndex = index === next ? 0 : -1
+      })
+      options[next].focus()
     })
     langMenu.appendChild(li)
   }
@@ -2800,6 +3064,9 @@ if (langToggle && langMenu) {
     }
     langMenu.hidden = !willOpen
     langToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false')
+    if (willOpen) {
+      langMenu.querySelector<HTMLElement>('[tabindex="0"]')!.focus()
+    }
   })
   document.addEventListener('click', function (e) {
     if (langMenu.hidden) {
@@ -2812,7 +3079,8 @@ if (langToggle && langMenu) {
   })
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && !langMenu.hidden) {
-      closeLangMenu()
+      e.preventDefault()
+      closeLangMenu(true)
     }
   })
 }
