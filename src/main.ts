@@ -347,6 +347,7 @@ let phoneRoute: SavedRoute | null = null
 let phoneDetailTrip: Trip | null = null
 let phoneRequestId = 0
 let lensRequestId = 0
+let pendingLensTrip: Trip | undefined
 
 function sameRoute(a: SavedRoute, b: SavedRoute): boolean {
   return a.fromCode === b.fromCode && a.toCode === b.toCode
@@ -368,9 +369,14 @@ function tripIndex(trips: Trip[], selected: Trip | null | undefined): number {
   })
 }
 
+function selectedLensTrip(): Trip | undefined {
+  return detailTrips[tripIdx] || pendingLensTrip
+}
+
 function replaceDetailTrips(trips: Trip[], selected: Trip | undefined) {
   const index = tripIndex(trips, selected)
   detailTrips = trips
+  pendingLensTrip = undefined
   let count = trips.length
   if (view !== 'detail') {
     count = Math.min(count, MAX_TRIP_OPTIONS)
@@ -576,7 +582,7 @@ async function openTripList(route?: SavedRoute, preserveSelection: boolean = fal
     }
     route = savedRoutes[index]
   }
-  const selected = preserveSelection ? detailTrips[tripIdx] : undefined
+  const selected = preserveSelection ? selectedLensTrip() : undefined
   const requestId = ++lensRequestId
   const opts = tripOpts()
   if (!preserveSelection) {
@@ -585,8 +591,13 @@ async function openTripList(route?: SavedRoute, preserveSelection: boolean = fal
   }
   detailRoute = route
   detailStatus = 'loading'
+  pendingLensTrip = selected
   detailTrips = []
-  await renderLens()
+  try {
+    await renderLens()
+  } catch (err) {
+    console.error(err)
+  }
   if (!currentLensRequest(requestId, route)) {
     return
   }
@@ -670,6 +681,7 @@ function goBack(): boolean {
     view = 'home'
     detailRoute = null
     detailTrips = []
+    pendingLensTrip = undefined
   } else {
     return false
   }
@@ -684,6 +696,8 @@ function cleanup() {
     return
   }
   cleanedUp = true
+  phoneRequestId++
+  lensRequestId++
   if (clockTimer) {
     clearInterval(clockTimer)
   }
@@ -1317,7 +1331,7 @@ function renderTrips(trips: Trip[], route: SavedRoute | null = detailRoute) {
       })
       card.classList.add('selected')
       mirrorDetailToLens(thisIdx, route, trips)
-      showDetail(trip)
+      showDetail(trip, route)
     })
     results.appendChild(card)
   }
@@ -1586,7 +1600,7 @@ function updatePhoneTrips(trips: Trip[], route: SavedRoute) {
   if (selected) {
     const index = tripIndex(trips, selected)
     if (index >= 0) {
-      showDetail(trips[index])
+      showDetail(trips[index], route, !stopsView.hidden)
     } else {
       detailView.hidden = true
       stopsView.hidden = true
@@ -1595,16 +1609,20 @@ function updatePhoneTrips(trips: Trip[], route: SavedRoute) {
   }
 }
 
-function showDetail(trip: Trip) {
+function showDetail(trip: Trip, route: SavedRoute | null = phoneRoute, preserveStops: boolean = false) {
+  const scrollTop = detailView.scrollTop
   phoneDetailTrip = trip
-  stopsView.hidden = true
+  if (!preserveStops) {
+    stopsView.hidden = true
+  }
   detailView.innerHTML = buildDetail(trip)
   const backBtn = detailView.querySelector<HTMLButtonElement>('#detail-back')
   if (backBtn) {
     backBtn.addEventListener('click', function () {
       detailView.hidden = true
       phoneDetailTrip = null
-      if (view === 'detail') {
+      const lensTrip = selectedLensTrip()
+      if (view === 'detail' && route && detailRoute && sameRoute(route, detailRoute) && lensTrip && tripKey(lensTrip) === tripKey(trip)) {
         view = 'list'
         renderLens().catch(function (err) {
           console.error(err)
@@ -1629,7 +1647,7 @@ function showDetail(trip: Trip) {
       }
     })
   })
-  detailView.scrollTop = 0
+  detailView.scrollTop = preserveStops ? scrollTop : 0
   detailView.hidden = false
 }
 
@@ -1798,6 +1816,7 @@ function mirrorHomeToLens() {
   view = 'home'
   detailRoute = null
   detailTrips = []
+  pendingLensTrip = undefined
   renderLens().catch(function (err) {
     console.error(err)
   })
@@ -1810,6 +1829,7 @@ function mirrorDetailToLens(idx: number, route: SavedRoute | null = detailRoute,
   lensRequestId++
   detailRoute = route
   detailTrips = trips
+  pendingLensTrip = undefined
   detailStatus = 'ready'
   tripIdx = idx
   view = 'detail'
@@ -2089,15 +2109,7 @@ function commitTime() {
   }
   closeTimeModal()
   updateDepBox()
-  if (phoneRoute) {
-    planJourney(phoneRoute).catch(function (err) {
-      console.error(err)
-    })
-  } else if (detailRoute && view !== 'home') {
-    openTripList(detailRoute).catch(function (err) {
-      console.error(err)
-    })
-  }
+  replanActiveJourneys()
 }
 
 tabDep.addEventListener('click', function () {
@@ -2177,7 +2189,7 @@ async function planJourney(activeRoute?: SavedRoute, mirror: boolean = true) {
   let selected: Trip | undefined
   const preserveSelection = activeRoute && detailRoute && sameRoute(route, detailRoute)
   if (preserveSelection) {
-    selected = detailTrips[tripIdx]
+    selected = selectedLensTrip()
   }
   if (!activeRoute) {
     phoneDetailTrip = null
@@ -2188,6 +2200,7 @@ async function planJourney(activeRoute?: SavedRoute, mirror: boolean = true) {
   if (mirror) {
     lensId = ++lensRequestId
     detailRoute = route
+    pendingLensTrip = selected
     detailTrips = []
     detailStatus = 'loading'
     if (!preserveSelection || view === 'home') {
