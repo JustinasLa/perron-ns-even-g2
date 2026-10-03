@@ -66,6 +66,7 @@ const en = {
   ariaLang: 'Switch language',
 
   loadingStations: 'Loading stations…',
+  errCouldNotLoadStations: 'Could not load stations. Try again when connected.',
   planning: 'Planning…',
   errPickBoth: 'Pick both a From and To station.',
   errSameStation: 'From and To are the same station.',
@@ -165,6 +166,7 @@ const nl: Record<StringKey, string> = {
   ariaLang: '',
 
   loadingStations: '',
+  errCouldNotLoadStations: '',
   planning: '',
   errPickBoth: '',
   errSameStation: '',
