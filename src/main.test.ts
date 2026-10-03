@@ -1748,14 +1748,14 @@ describe('planning request ordering', () => {
 
   it('does not start a lens fetch if a newer route opens while its loading draw is pending', async () => {
     await boot({ routes: [route, amstelRoute] })
-    const display = deferred<number>()
+    const display = deferred<boolean>()
     mocks.bridge.textContainerUpgrade.mockReturnValueOnce(display.promise)
     gesture(OsEventTypeList.CLICK_EVENT, true)
     await flush()
     gesture(OsEventTypeList.DOUBLE_CLICK_EVENT)
     gesture(OsEventTypeList.SCROLL_BOTTOM_EVENT)
     gesture(OsEventTypeList.CLICK_EVENT, true)
-    display.resolve(0)
+    display.resolve(true)
     await flush()
     expect(mocks.trips).toHaveBeenCalledOnce()
     expect(mocks.trips).toHaveBeenCalledWith('UT', 'ASA', { lang: 'en' })
@@ -2061,18 +2061,23 @@ describe('planning request ordering', () => {
     expect(element('#results').querySelectorAll('.trip-card')).toHaveLength(1)
   })
 
-  it('reports a lens display failure while starting a language replan', async () => {
+  it.each([1, 2])('reports a lens display failure on update %i while starting a language replan', async (update) => {
     await boot({ routes: [route] })
     gesture(OsEventTypeList.CLICK_EVENT, true)
     await flush()
     const error = new Error('lens display unavailable')
+    if (update === 2) mocks.bridge.textContainerUpgrade.mockResolvedValueOnce(true)
     mocks.bridge.textContainerUpgrade.mockRejectedValueOnce(error)
     click('#lang-toggle')
     click('#lang-menu .option:nth-child(2)')
     await flush()
     expect(console.error).toHaveBeenCalledWith(error)
-    expect(mocks.trips).toHaveBeenCalledOnce()
+    expect(mocks.trips).toHaveBeenCalledTimes(update === 1 ? 2 : 1)
     expect(api.state.detailRoute).toEqual(route)
     expect(element('#results').innerHTML).toBe('')
+    if (update === 1) {
+      expect(mocks.trips).toHaveBeenLastCalledWith('UT', 'ASD', { lang: 'nl' })
+      expect(api.state.detailStatus).toBe('ready')
+    }
   })
 })
