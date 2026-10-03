@@ -33,7 +33,28 @@ describe('NS proxy', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8')
     expect(response.headers.get('cache-control')).toBe('public, max-age=3600')
-    expect(await response.text()).toContain('<title>Privacy Policy')
+    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+    const html = await response.text()
+    expect(html).toContain('<title>Privacy Policy')
+    expect(html).toContain('Last updated: 3 October 2026')
+    expect(html).toContain("Even Hub's host-backed storage")
+    expect(html).toContain('<strong>Language preference</strong>')
+    expect(html).toMatch(/Successful downloads are cached\s+for the app session; failed downloads can be retried on later user actions\./)
+    expect(html).toMatch(/Station autocomplete runs locally against that list; the text you type is not\s+sent to the proxy or NS\./)
+    expect(html).toMatch(/<code>dateTime<\/code> when you choose a specific time or use\s+arrival mode \(including "now"\), and <code>searchForArrival<\/code> for arrival\s+searches\./)
+    for (const field of ['getLocalStorage', 'setLocalStorage', 'station', 'fromStation', 'toStation', 'dateTime', 'searchForArrival', 'lang', 'train']) {
+      expect(html).toContain('<code>' + field + '</code>')
+    }
+    expect(html).toContain('Departure boards and disruptions:')
+    expect(html).toContain('Journey planning:')
+    expect(html).toContain('Train stop lists:')
+    expect(html).toMatch(/platform retention and deletion are\s+controlled by Even Hub\./)
+    expect(html).toMatch(/Retention of\s+requests or metadata processed by Cloudflare and NS is governed by those\s+providers' policies\./)
+    expect(html).toContain('justinas.launikonis@student.nhlstenden.com')
+    expect(html).not.toContain('browser <code>localStorage</code>')
+    expect(html).not.toContain('transiently')
+    expect(html).not.toContain('Removing the app')
+    expect(html).not.toContain('justinas.launikonis@gmail.com')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -58,6 +79,25 @@ describe('NS proxy', () => {
     const response = await worker.fetch(request(), env)
     expect(response.status).toBe(502)
     expect(await response.json()).toEqual({ error: 'Upstream fetch failed', detail: 'Error: offline' })
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+    expect(response.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
+  it('returns a readable 502 when the upstream body stream fails', async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"payload":'))
+      },
+      pull(controller) {
+        controller.error(new Error('body stream failed'))
+      },
+    })
+    const fetchMock = vi.fn().mockResolvedValue(new Response(stream))
+    vi.stubGlobal('fetch', fetchMock)
+    const response = await worker.fetch(request(), env)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(response.status).toBe(502)
+    expect(await response.json()).toEqual({ error: 'Upstream fetch failed', detail: 'Error: body stream failed' })
     expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
     expect(response.headers.get('access-control-allow-origin')).toBe('*')
   })
