@@ -71,6 +71,10 @@ interface SavedRoute {
 const ROUTES_KEY = 'perron-ns.routes.v1'
 let savedRoutes: SavedRoute[] = []
 
+function isStoredText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 async function loadRoutes(): Promise<SavedRoute[]> {
   try {
     const stored = await bridge.getLocalStorage(ROUTES_KEY)
@@ -78,11 +82,24 @@ async function loadRoutes(): Promise<SavedRoute[]> {
     if (stored) {
       text = stored
     }
-    const raw = JSON.parse(text)
-    if (Array.isArray(raw)) {
-      return raw
+    const raw: unknown = JSON.parse(text)
+    if (!Array.isArray(raw)) {
+      return []
     }
-    return []
+    const result: SavedRoute[] = []
+    const seen = new Set<string>()
+    for (const r of raw) {
+      if (!r || typeof r !== 'object' || !isStoredText(r.fromCode) || !isStoredText(r.fromName) || !isStoredText(r.toCode) || !isStoredText(r.toName)) {
+        continue
+      }
+      const key = JSON.stringify([r.fromCode, r.toCode])
+      if (seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      result.push({ fromCode: r.fromCode, fromName: r.fromName, toCode: r.toCode, toName: r.toName })
+    }
+    return result.slice(0, 8)
   } catch {
     return []
   }
@@ -128,6 +145,11 @@ function removeRoute(fromCode: string, toCode: string) {
 
 function onRoutesChanged() {
   renderSavedRoutes()
+  if (view === 'home') {
+    renderLens().catch(function (err) {
+      console.error(err)
+    })
+  }
 }
 
 type FavIcon = 'home' | 'work' | 'default'
@@ -147,14 +169,22 @@ async function loadFavorites(): Promise<Favorite[]> {
     if (stored) {
       text = stored
     }
-    const raw = JSON.parse(text)
+    const raw: unknown = JSON.parse(text)
     if (!Array.isArray(raw)) {
       return []
     }
     const result: Favorite[] = []
+    const seen = new Set<string>()
     for (const f of raw) {
+      if (!f || typeof f !== 'object' || !isStoredText(f.code) || !isStoredText(f.name)) {
+        continue
+      }
+      if (seen.has(f.code)) {
+        continue
+      }
+      seen.add(f.code)
       let label = f.name
-      if (f.label !== undefined && f.label !== null) {
+      if (typeof f.label === 'string') {
         label = f.label
       }
       let icon: FavIcon = 'default'
@@ -700,6 +730,15 @@ function icon(name: string, opts: { size?: number; cls?: string; recolor?: boole
   return '<span aria-hidden="true" class="' + classAttr + '">' + raw + '</span>'
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 const ARROW_ICON = icon('Guide System/Go', { size: 20 })
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
@@ -1069,7 +1108,7 @@ function serviceBadges(legs: TripLeg[]): string {
     if (l.mode === 'WALK') {
       continue
     }
-    html += '<span class="badge">' + modeIcon(l.mode, 18) + legBadgeLabel(l) + '</span>'
+    html += '<span class="badge">' + modeIcon(l.mode, 18) + escapeHtml(legBadgeLabel(l)) + '</span>'
   }
   return html
 }
@@ -1165,7 +1204,7 @@ function renderTrips(trips: Trip[]) {
     if (trip.cancelled) {
       let reason = ''
       if (trip.cancellationReason) {
-        reason = ' - ' + trip.cancellationReason
+        reason = ' - ' + escapeHtml(trip.cancellationReason)
       }
       cancelledHtml = '<div class="trip-cancelled">' + tr('cancelled') + reason + '</div>'
     }
@@ -1247,7 +1286,7 @@ function platformBadge(track: string): string {
   if (!track) {
     return ''
   }
-  return '<span class="platform">' + track + '</span>'
+  return '<span class="platform">' + escapeHtml(track) + '</span>'
 }
 
 const STATION_DOT = '<span class="station-dot"></span>'
@@ -1260,7 +1299,7 @@ function legCard(leg: TripLeg, idx: number): string {
   const stops = leg.intermediateStops + ' ' + stopWord
   let exitHtml = ''
   if (leg.exitSide) {
-    exitHtml = '<span class="leg-exit">' + tr('exitSideLabel') + ' ' + leg.exitSide.toLowerCase() + '</span>'
+    exitHtml = '<span class="leg-exit">' + tr('exitSideLabel') + ' ' + escapeHtml(leg.exitSide.toLowerCase()) + '</span>'
   }
   let serviceOpen = '<div class="leg-service">'
   let chevron = ''
@@ -1286,20 +1325,20 @@ function legCard(leg: TripLeg, idx: number): string {
       </div>
       <div class="leg-body">
         <div class="leg-stop">
-          <span class="leg-station">${leg.origin}</span>
+          <span class="leg-station">${escapeHtml(leg.origin)}</span>
           ${platformBadge(leg.originTrack)}
         </div>
         ${serviceOpen}
           <div class="leg-service-text">
-            <div class="leg-service-name">${leg.displayName}</div>
-            <div class="leg-service-dir">${tr('connectorTo')} ${leg.direction}</div>
+            <div class="leg-service-name">${escapeHtml(leg.displayName)}</div>
+            <div class="leg-service-dir">${tr('connectorTo')} ${escapeHtml(leg.direction)}</div>
             <div class="leg-service-meta">${crowdInline(leg.crowd)} · ${stops}</div>
           </div>
           ${chevron}
         </div>
         <div class="leg-stop">
           <span>
-            <span class="leg-station">${leg.destination}</span>
+            <span class="leg-station">${escapeHtml(leg.destination)}</span>
             ${exitHtml}
           </span>
           ${platformBadge(leg.destinationTrack)}
@@ -1335,7 +1374,7 @@ function transferBlock(prev: TripLeg, next: TripLeg): string {
     return `
     <div class="xfer-row">
       <span class="xfer-left">${left}</span>
-      <span class="xfer-text">${text}</span>
+      <span class="xfer-text">${escapeHtml(text)}</span>
     </div>`
   }
 
@@ -1387,7 +1426,7 @@ function buildSummary(trip: Trip): string {
   for (let i = 0; i < trip.legs.length; i++) {
     const l = trip.legs[i]
     if (l.mode !== 'WALK') {
-      badges += '<span class="badge">' + modeIcon(l.mode, 18) + legBadgeLabel(l) + '</span>'
+      badges += '<span class="badge">' + modeIcon(l.mode, 18) + escapeHtml(legBadgeLabel(l)) + '</span>'
     }
     if (i < trip.legs.length - 1) {
       const gap = gapMinutes(l.arrival, trip.legs[i + 1].departure)
@@ -1402,7 +1441,7 @@ function buildSummary(trip: Trip): string {
   if (trip.cancelled) {
     let reason = ''
     if (trip.cancellationReason) {
-      reason = ' — ' + trip.cancellationReason
+      reason = ' — ' + escapeHtml(trip.cancellationReason)
     }
     cancelledHtml = '<div class="trip-cancelled">Cancelled' + reason + '</div>'
   }
@@ -1443,7 +1482,7 @@ function buildDetail(trip: Trip): string {
     <header class="detail-header">
       <button id="detail-back" type="button" aria-label="${tr('ariaBack')}" class="icon-btn">${BACK_ICON}</button>
       <div class="detail-title">
-        <div class="detail-title-main">${from} - ${to}</div>
+        <div class="detail-title-main">${escapeHtml(from)} - ${escapeHtml(to)}</div>
         <div class="detail-title-sub">${fmtDateHeader(trip.departure)}</div>
       </div>
       <span class="header-spacer"></span>
@@ -1565,7 +1604,7 @@ function stopRow(stop: LegStop, i: number, total: number, boardIdx: number, exit
         ${lineBottom}
       </div>
       <div class="stop-body">
-        <span class="${nameClass}">${stop.name}</span>
+        <span class="${nameClass}">${escapeHtml(stop.name)}</span>
         ${platformBadge(stop.track)}
         ${marker}
       </div>
@@ -1581,8 +1620,8 @@ function buildStops(leg: TripLeg, stops: LegStop[], boardIdx: number, exitIdx: n
     <header class="detail-header">
       <button id="stops-back" type="button" aria-label="${tr('ariaBack')}" class="icon-btn">${BACK_ICON}</button>
       <div class="detail-title">
-        <div class="detail-title-main">${leg.displayName}</div>
-        <div class="detail-title-sub">${tr('connectorTo')} ${leg.direction}</div>
+        <div class="detail-title-main">${escapeHtml(leg.displayName)}</div>
+        <div class="detail-title-sub">${tr('connectorTo')} ${escapeHtml(leg.direction)}</div>
       </div>
       <span class="header-spacer"></span>
     </header>
@@ -2143,7 +2182,7 @@ function renderSavedRoutes() {
     const r = savedRoutes[i]
     html +=
       '<div class="chip row-item row-divider" data-ri="' + i + '">' +
-      '<span class="row-name">' + r.fromName + ' ' + icon('Guide System/Go', { size: 15, cls: 'muted' }) + ' ' + r.toName + '</span>' +
+      '<span class="row-name">' + escapeHtml(r.fromName) + ' ' + icon('Guide System/Go', { size: 15, cls: 'muted' }) + ' ' + escapeHtml(r.toName) + '</span>' +
       '<button class="del menu-btn" data-ri="' + i + '" type="button" aria-label="' + tr('ariaRemoveRoute') + '">' + MENU_DOTS + '</button>' +
       '</div>'
   }
@@ -2190,7 +2229,7 @@ function renderFavorites() {
     html +=
       '<div class="fav row-item row-divider" data-fi="' + i + '">' +
       '<span class="row-icon">' + iconSvg(f.icon, 22) + '</span>' +
-      '<span class="row-name">' + f.label + '</span>' +
+      '<span class="row-name">' + escapeHtml(f.label) + '</span>' +
       '<button class="favmenu menu-btn" data-fi="' + i + '" type="button" aria-label="' + tr('ariaEditFav') + '">' + MENU_DOTS + '</button>' +
       '</div>'
   }
@@ -2250,7 +2289,7 @@ function showFavEdit(index: number) {
     </button>`
   }
 
-  const safeLabel = fav.label.replace(/"/g, '&quot;')
+  const safeLabel = escapeHtml(fav.label)
   favEditView.innerHTML = `
     <header class="detail-header">
       <button id="fav-back" type="button" aria-label="${tr('ariaBack')}" class="icon-btn">${BACK_ICON}</button>
@@ -2259,7 +2298,7 @@ function showFavEdit(index: number) {
     </header>
     <main class="sheet-main">
       <div class="fav-preview">
-        <span class="fav-preview-pill">${fav.name}</span>
+        <span class="fav-preview-pill">${escapeHtml(fav.name)}</span>
       </div>
 
       <div class="field-label">${tr('nameLabel')}</div>

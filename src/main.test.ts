@@ -231,6 +231,88 @@ describe('startup and persistence', () => {
     expect(lens()).toContain('Utrecht Centraal to Amsterdam Centraal')
   })
 
+  it('retains valid routes from mixed malformed stored entries', async () => {
+    const anotherRoute = { ...route, toCode: 'ASA', toName: 'Amsterdam Amstel' }
+    const invalidRoutes = ['fromCode', 'fromName', 'toCode', 'toName'].flatMap(field =>
+      [null, 42, '', '  '].map(value => ({ ...route, [field]: value })),
+    )
+    await boot({ routes: [null, false, 7, 'bad', [], {}, route, ...invalidRoutes, anotherRoute] })
+    expect(api.state.savedRoutes).toEqual([route, anotherRoute])
+    expect(element('#saved').querySelectorAll('.chip')).toHaveLength(2)
+    expect(lens()).toContain('Utrecht Centraal to Amsterdam Amstel')
+    click('#saved .del')
+    api.addRoute(route)
+    await flush()
+    expect(api.state.savedRoutes).toEqual([route, anotherRoute])
+    expect(JSON.parse(mocks.bridge.setLocalStorage.mock.calls.at(-1)![1])).toEqual([route, anotherRoute])
+  })
+
+  it('deduplicates loaded routes in stored order and caps valid history at eight', async () => {
+    const history = Array.from({ length: 10 }, (_, i) => ({ ...route, toCode: 'T' + i, toName: 'Target ' + i }))
+    await boot({ routes: [null, history[0], history[0], ...history.slice(1)] })
+    expect(api.state.savedRoutes).toEqual(history.slice(0, 8))
+    expect(element('#saved').querySelectorAll('.chip')).toHaveLength(8)
+  })
+
+  it('retains editable favorites while normalizing malformed entries and duplicates', async () => {
+    const validFavorites = [
+      { code: 'UT', name: 'Utrecht Centraal' },
+      { code: 'ASD', name: 'Amsterdam Centraal', label: 42, icon: 42 },
+      { code: 'ASA', name: 'Amsterdam Amstel', label: {}, icon: true },
+      { code: 'BER', name: 'Berlin', label: true, icon: {} },
+      { code: 'AMS', name: 'Amsterdam Airport', label: 'Airport', icon: 'home' },
+    ]
+    const invalidFavorites = ['code', 'name'].flatMap(field =>
+      [null, 42, '', '  '].map(value => ({ code: 'UT', name: 'Utrecht Centraal', [field]: value })),
+    )
+    await boot({ favorites: [null, false, 7, 'bad', [], {}, validFavorites[0], ...invalidFavorites, ...validFavorites.slice(1), { code: 'AMS', name: 'Duplicate' }] })
+    expect(api.state.favorites).toEqual([
+      { code: 'UT', name: 'Utrecht Centraal', label: 'Utrecht Centraal', icon: 'default' },
+      { code: 'ASD', name: 'Amsterdam Centraal', label: 'Amsterdam Centraal', icon: 'default' },
+      { code: 'ASA', name: 'Amsterdam Amstel', label: 'Amsterdam Amstel', icon: 'default' },
+      { code: 'BER', name: 'Berlin', label: 'Berlin', icon: 'default' },
+      { code: 'AMS', name: 'Amsterdam Airport', label: 'Airport', icon: 'home' },
+    ])
+    for (let i = 0; i < validFavorites.length; i++) {
+      click('#fav-list .favmenu[data-fi="' + i + '"]')
+      expect(element<HTMLInputElement>('#fav-name').value).toBe(api.state.favorites[i].label)
+      click('#fav-save')
+    }
+    await flush()
+    expect(JSON.parse(mocks.bridge.setLocalStorage.mock.calls.at(-1)![1])).toEqual(api.state.favorites)
+    click('#fav-list .favmenu[data-fi="0"]')
+    click('#fav-remove')
+    expect(api.state.favorites.map((f: any) => f.code)).toEqual(['ASD', 'ASA', 'BER', 'AMS'])
+  })
+
+  it('updates the home lens selection immediately when a selected route is removed', async () => {
+    const nextRoute = { fromCode: 'ASD', fromName: 'Amsterdam Centraal', toCode: 'ASA', toName: 'Amsterdam Amstel' }
+    await boot({ routes: [route, nextRoute] })
+    expect(lens()).toContain('> 1. Utrecht Centraal to Amsterdam Centraal')
+    click('#saved .del')
+    await flush()
+    expect(element('#saved').textContent).toContain('Amsterdam Centraal')
+    expect(element('#saved').textContent).not.toContain('Utrecht Centraal')
+    expect(lens()).toContain('> 1. Amsterdam Centraal to Amsterdam Amstel')
+    expect(lens()).not.toContain('Utrecht Centraal')
+    gesture(OsEventTypeList.CLICK_EVENT, true)
+    await flush()
+    expect(mocks.trips).toHaveBeenCalledWith('ASD', 'ASA', { lang: 'en' })
+  })
+
+  it('clears the home lens immediately when the last saved route is removed', async () => {
+    await boot({ routes: [route] })
+    click('#saved .del')
+    await flush()
+    expect(api.state.savedRoutes).toEqual([])
+    expect(element('#saved').textContent).toContain('no recently planned journeys')
+    expect(lens()).toContain('Please set a route')
+    expect(lens()).not.toContain('Utrecht Centraal')
+    gesture(OsEventTypeList.CLICK_EVENT, true)
+    await flush()
+    expect(mocks.trips).not.toHaveBeenCalled()
+  })
+
   it('deduplicates routes, caps history at eight, and persists additions and removals', async () => {
     await boot({ routes: Array.from({ length: 8 }, (_, i) => ({ ...route, toCode: 'T' + i, toName: 'Target ' + i })) })
     api.addRoute(route)
@@ -993,6 +1075,9 @@ describe('SDK rendering failures', () => {
 
   it('reports navigation, mirroring, localization, and clock rendering failures', async () => {
     await boot({ routes: [route] })
+    await renderingFailure(() => api.removeRoute(route.fromCode, route.toCode))
+    api.addRoute(route)
+    await flush()
     await renderingFailure(() => api.cycleJourney(1))
     api.state.detailRoute = route
     api.state.detailTrips = [trip()]
@@ -1216,5 +1301,107 @@ describe('SDK startup and lifecycle recovery', () => {
     expect(mocks.bridge.textContainerUpgrade).toHaveBeenCalledTimes(calls)
     expect(mocks.unsubscribe).toHaveBeenCalledOnce()
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('literal planner text', () => {
+  it('preserves favorite station names and labels through saving, reloading, and reopening', async () => {
+    const name = 'Utrecht\'s <b>West</b> &amp; "Hub"'
+    const label = 'My "Office" &copy; &quot; <img src=x onerror="window.injected=true">'
+    await boot()
+    api.addFavorite({ code: 'UT', name })
+    expect(element('#fav-list .row-name').textContent).toBe(name)
+    click('#fav-list .favmenu')
+    expect(element('#fav-edit .fav-preview-pill').textContent).toBe(name)
+    expect(element<HTMLInputElement>('#fav-name').value).toBe(name)
+    input('#fav-name', label)
+    click('#fav-save')
+    expect(element('#fav-list .row-name').textContent).toBe(label)
+    expect(element('#fav-list').querySelector('img, b, [onerror]')).toBeNull()
+    expect(element('#fav-list').querySelector('svg')).not.toBeNull()
+    const storageCalls = mocks.bridge.setLocalStorage.mock.calls.filter(([key]) => key === 'perron-ns.favorites.v1')
+    const stored = JSON.parse(storageCalls[storageCalls.length - 1][1])
+    expect(stored).toEqual([{ code: 'UT', name, label, icon: 'default' }])
+    api.cleanup()
+    await boot({ favorites: stored })
+    expect(element('#fav-list .row-name').textContent).toBe(label)
+    click('#fav-list .favmenu')
+    expect(element<HTMLInputElement>('#fav-name').value).toBe(label)
+    expect(element('#fav-edit .fav-preview-pill').textContent).toBe(name)
+    expect(element('#fav-edit').querySelector('img, b, [onerror]')).toBeNull()
+    click('#fav-save')
+    expect(api.state.favorites[0]).toEqual(stored[0])
+    expect(mocks.bridge.setLocalStorage).toHaveBeenLastCalledWith('perron-ns.favorites.v1', JSON.stringify(stored))
+  })
+
+  it('renders stored route names literally while preserving the route icon', async () => {
+    const fromName = 'Utrecht <b>West</b> &copy; "Hub"'
+    const toName = 'Amsterdam <img src=x onerror="window.injected=true"> &amp; East'
+    await boot({ routes: [{ ...route, fromName, toName }] })
+    const row = element('#saved .row-name')
+    expect(row.firstChild!.textContent).toBe(fromName + ' ')
+    expect(row.lastChild!.textContent).toBe(' ' + toName)
+    expect(row.querySelector('img, b, [onerror]')).toBeNull()
+    expect(row.querySelector('svg')).not.toBeNull()
+  })
+
+  it('renders external cancellation, service, station, platform, and journey-stop text literally', async () => {
+    const reason = 'Cancelled <img src=x onerror="window.injected=true"> &copy; "Today"'
+    const origin = 'Utrecht <b>West</b> &quot; Hub'
+    const destination = 'Amsterdam <img src=x onerror="window.injected=true"> &amp; East'
+    const category = 'IC <b>Line</b> &copy;'
+    const displayName = 'Intercity <img src=x onerror="window.injected=true"> &amp; Express'
+    const direction = 'Amsterdam <b>East</b> &quot;'
+    const originTrack = '5 <b>West</b> &copy;'
+    const destinationTrack = '7 <img src=x onerror="window.injected=true">'
+    const middle = stop('Amstel <img src=x onerror="window.injected=true"> &copy;', { track: '2 <b>South</b> &amp;' })
+    const partial = [stop(origin, { track: originTrack }), middle, stop(destination, { track: destinationTrack })]
+    const full = [stop('Before <b>West</b> &copy;'), ...partial, stop('After <img src=x onerror="window.injected=true">')]
+    const itinerary = trip({ cancelled: true, cancellationReason: reason, legs: [leg({ origin, destination, category, displayName, direction, originTrack, destinationTrack, stops: partial })] })
+    mocks.trips.mockResolvedValue([itinerary])
+    mocks.journey.mockResolvedValue(full)
+    await boot()
+    input('#from', route.fromName, route.fromCode)
+    input('#to', route.toName, route.toCode)
+    click('#plan')
+    await flush()
+    expect(element('#results .trip-cancelled').textContent).toContain(reason)
+    expect(element('#results .badge').lastChild!.textContent).toBe(category)
+    expect(element('#results').querySelector('img, b, [onerror]')).toBeNull()
+    expect(element('#results').querySelector('svg')).not.toBeNull()
+    click('#results .trip-card')
+    expect(element('#detail .detail-title-main').textContent).toBe(origin + ' - ' + destination)
+    expect(element('#detail .trip-cancelled').textContent).toContain(reason)
+    expect(element('#detail .badge').lastChild!.textContent).toBe(category)
+    expect(Array.from(element('#detail').querySelectorAll('.leg-station'), el => el.textContent)).toEqual([origin, destination])
+    expect(element('#detail .leg-service-name').textContent).toBe(displayName)
+    expect(element('#detail .leg-service-dir').textContent).toContain(direction)
+    expect(Array.from(element('#detail').querySelectorAll('.platform'), el => el.textContent)).toEqual([originTrack, destinationTrack])
+    expect(element('#detail').querySelector('img, b, [onerror]')).toBeNull()
+    click('#detail .leg-service--tap')
+    expect(Array.from(element('#stops').querySelectorAll('.stop-name'), el => el.textContent)).toEqual(partial.map(s => s.name))
+    await flush()
+    expect(element('#stops .detail-title-main').textContent).toBe(displayName)
+    expect(element('#stops .detail-title-sub').textContent).toContain(direction)
+    expect(Array.from(element('#stops').querySelectorAll('.stop-name'), el => el.textContent)).toEqual(full.map(s => s.name))
+    expect(Array.from(element('#stops').querySelectorAll('.platform'), el => el.textContent)).toEqual(full.map(s => s.track))
+    expect(element('#stops').querySelector('img, b, [onerror]')).toBeNull()
+    expect(element('#stops').querySelector('svg')).not.toBeNull()
+  })
+
+  it('renders transfer platforms and operators literally while preserving transfer icons', async () => {
+    await boot()
+    const originTrack = '9 <b>West</b> &copy;'
+    const previousOperator = 'NS<b>Rail</b>'
+    const nextOperator = 'Arriva&amp;Transit'
+    const first = leg({ operator: previousOperator, arrival: '2026-10-02T10:00:00Z' })
+    const next = leg({ operator: nextOperator, departure: '2026-10-02T10:10:00Z', originTrack })
+    api.showDetail(trip({ legs: [first, next] }))
+    const transfer = element('#detail .xfer')
+    const text = Array.from(transfer.querySelectorAll('.xfer-text'), el => el.textContent)
+    expect(text).toContain('Walk to platform ' + originTrack)
+    expect(text).toContain('Check out/in: ' + previousOperator + ' - ' + nextOperator)
+    expect(transfer.querySelector('img, b, [onerror]')).toBeNull()
+    expect(transfer.querySelector('svg')).not.toBeNull()
   })
 })
